@@ -1,0 +1,3078 @@
+#!/usr/bin/env python3
+"""
+ElectroMart — Electronics, Elevated
+===================================
+Single-file Python launcher for the ElectroMart storefront.
+
+Run:      python electromart_app.py            (opens http://127.0.0.1:8000)
+Options:  python electromart_app.py 9000       (use another port)
+Stop:     Ctrl+C
+
+Notes
+- Uses only the Python standard library (no pip installs).
+- Shoppers can browse and fill a cart as guests; login / create-account is
+  only requested when they press Checkout.
+- Accounts, carts and orders are stored in the browser's localStorage, which is
+  tied to the address you open. Keep using the same port to keep your data.
+"""
+import sys
+import threading
+import webbrowser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ElectroMart — Electronics, Elevated</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Jost:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* ==========================================================================
+   ElectroMart — visual identity
+   Palette: indigo dusk, brass ironwork, awning rouge.
+   Signature element: the Eiffel Tower lattice — used as the brand mark,
+   a hero silhouette, and a diagonal cross-hatch texture standing in for
+   the wrought-iron trusswork of the tower itself.
+   ========================================================================== */
+
+:root{
+  --paper:#F7F2E6;
+  --card:#FFFFFF;
+  --ink:#1C2541;
+  --ink-dim:#5C6584;
+  --gold:#B8923D;
+  --gold-dim:#8F701F;
+  --wine:#8C3B4A;
+  --wine-dim:#6E2E3A;
+  --iron:#26261F;
+  --line:rgba(28,37,65,0.15);
+  --line-soft:rgba(28,37,65,0.08);
+  --radius:6px;
+  --display:'Playfair Display', serif;
+  --body:'Jost', sans-serif;
+  --mono:'JetBrains Mono', monospace;
+}
+*{box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{
+  margin:0; color:var(--ink); font-family:var(--body); -webkit-font-smoothing:antialiased;
+  background-color:var(--paper);
+  background-image:
+    linear-gradient(135deg, var(--line-soft) 1px, transparent 1px),
+    linear-gradient(45deg, var(--line-soft) 1px, transparent 1px);
+  background-size: 34px 34px;
+}
+a{color:inherit;} button{font-family:inherit;}
+::selection{background:var(--gold); color:#fff;}
+.hide{display:none !important;}
+
+/* ---------- shared bits ---------- */
+.eyebrow{font-family:var(--mono); font-size:11px; letter-spacing:2px; text-transform:uppercase; color:var(--wine);}
+.spec-row{display:flex; align-items:baseline; font-family:var(--mono); font-size:11.5px; color:var(--ink-dim); margin:3px 0;}
+.spec-row span:last-child{margin-left:auto; color:var(--ink);}
+
+/* Eiffel Tower brand mark, drawn in pure CSS via a clipped stack of bars */
+.tower-mark{width:20px; height:24px; position:relative; flex:none;}
+.tower-mark i{position:absolute; left:50%; background:var(--gold); transform:translateX(-50%);}
+.tower-mark .t1{top:0; width:3px; height:10px;}
+.tower-mark .t2{top:9px; width:10px; height:3px; clip-path:polygon(50% 0,100% 100%,0 100%);}
+.tower-mark .t3{top:12px; width:14px; height:6px;}
+.tower-mark .t4{top:17px; width:20px; height:3px;}
+.tower-mark .t5{top:20px; width:2px; height:4px; left:25%;}
+.tower-mark .t6{top:20px; width:2px; height:4px; left:75%;}
+
+/* ---------- auth screens ---------- */
+.auth-wrap{min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; position:relative; overflow:hidden;}
+.auth-wrap .tower-silhouette{position:absolute; bottom:-30px; right:-50px; width:420px; height:560px; opacity:0.06; pointer-events:none; fill:var(--ink);}
+.auth-card{
+  background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+  width:100%; max-width:410px; padding:36px 34px 30px; position:relative; z-index:1;
+  box-shadow:0 18px 46px rgba(28,37,65,0.14);
+}
+.auth-card::before{
+  content:""; position:absolute; top:0; left:0; right:0; height:5px; border-radius:6px 6px 0 0;
+  background:repeating-linear-gradient(115deg, var(--gold) 0 12px, var(--wine) 12px 24px);
+}
+.auth-brand{display:flex; align-items:center; gap:10px; margin-bottom:6px;}
+.auth-brand span{font-family:var(--display); font-weight:700; font-size:23px; letter-spacing:.2px;}
+.auth-tag{font-family:var(--mono); font-size:11px; color:var(--ink-dim); margin-bottom:28px; letter-spacing:.5px;}
+.field{margin-bottom:16px;}
+.field label{display:block; font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:1px; color:var(--ink-dim); margin-bottom:6px;}
+.field input, .field select, .field textarea{
+  width:100%; border:1px solid var(--line); border-radius:4px; background:var(--paper);
+  padding:11px 12px; font-family:var(--body); font-size:14.5px; color:var(--ink);
+}
+.field input:focus, .field select:focus, .field textarea:focus{outline:2px solid var(--gold); outline-offset:1px; background:#fff;}
+.btn{font-family:var(--body); font-weight:600; font-size:14px; border:none; border-radius:4px; padding:12px 18px; cursor:pointer; letter-spacing:.2px;}
+.btn:focus-visible{outline:2px solid var(--gold); outline-offset:2px;}
+.btn-block{width:100%;}
+.btn-gold{background:var(--gold); color:#fff;}
+.btn-gold:hover{background:var(--gold-dim);}
+.btn-gold:disabled{opacity:.45; cursor:not-allowed;}
+.btn-ghost{background:none; border:1px solid var(--line); color:var(--ink);}
+.link-btn{background:none; border:none; padding:0; margin:0; font:inherit; color:var(--gold); text-decoration:underline; cursor:pointer; display:inline;}
+.btn-ghost:hover{border-color:var(--ink-dim);}
+.btn-wine{background:var(--wine); color:#fff;}
+.btn-wine:hover{background:var(--wine-dim);}
+.auth-switch{font-size:12.5px; color:var(--ink-dim); margin-top:20px; text-align:center;}
+.auth-switch button{background:none; border:none; color:var(--wine); font-weight:600; cursor:pointer; padding:0; font-size:12.5px;}
+.auth-hint{margin-top:18px; border:1px dashed var(--line); border-radius:4px; padding:10px 12px; font-family:var(--mono); font-size:11px; color:var(--ink-dim); line-height:1.6;}
+.flash{font-family:var(--mono); font-size:12px; background:#FBEEEC; border:1px solid var(--wine); color:var(--wine-dim); padding:10px 12px; border-radius:4px; margin-bottom:16px;}
+.flash.ok{background:#F1EFE0; border-color:var(--gold-dim); color:var(--gold-dim);}
+
+/* ---------- app shell ---------- */
+header.topbar{
+  position:sticky; top:0; z-index:40; background:rgba(247,242,230,0.94); backdrop-filter:blur(6px);
+  border-bottom:1px solid var(--line); padding:14px 26px; display:flex; align-items:center; gap:22px; flex-wrap:wrap;
+}
+.brand{display:flex; align-items:center; gap:10px; font-family:var(--display); font-weight:700; font-size:20px;}
+nav.tabs{display:flex; gap:4px; font-family:var(--mono); font-size:12px;}
+nav.tabs button{background:none; border:1px solid transparent; border-radius:4px; padding:7px 12px; cursor:pointer; color:var(--ink-dim); text-transform:uppercase; letter-spacing:.6px;}
+nav.tabs button.active{color:var(--ink); border-color:var(--line); background:var(--card);}
+.topbar-search{flex:1; min-width:180px; display:flex; align-items:center; gap:8px; background:var(--card); border:1px solid var(--line); border-radius:4px; padding:9px 12px;}
+.topbar-search input{border:none; background:none; outline:none; width:100%; font-size:13.5px; color:var(--ink);}
+.topbar-actions{display:flex; align-items:center; gap:14px; margin-left:auto;}
+.user-chip{font-family:var(--mono); font-size:11.5px; color:var(--ink-dim);}
+.icon-btn{position:relative; background:none; border:1px solid var(--line); border-radius:4px; color:var(--ink); cursor:pointer; font-family:var(--body); font-size:13px; padding:8px 12px; display:flex; align-items:center; gap:6px;}
+.icon-btn:hover{border-color:var(--gold);}
+.badge{background:var(--wine); color:#fff; font-family:var(--mono); font-size:10px; font-weight:700; border-radius:999px; padding:1px 6px; line-height:1.5;}
+
+main{max-width:1180px; margin:0 auto; padding:30px 26px 60px;}
+.section-head{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:18px; border-bottom:1px solid var(--line); padding-bottom:12px;}
+.section-head h1, .section-head h2{font-family:var(--display); font-weight:700; font-size:24px; margin:0;}
+
+/* Hero banner with Eiffel Tower silhouette signature */
+.hero{
+  position:relative; overflow:hidden; border-radius:8px; margin-bottom:28px;
+  background:linear-gradient(135deg, var(--ink) 0%, #2A3763 100%);
+  color:#F3EFE2; padding:34px 30px; display:flex; align-items:center; gap:24px;
+}
+.hero .tower-silhouette{position:absolute; right:-10px; bottom:-16px; width:220px; height:280px; opacity:0.9; fill:#F3EFE2;}
+.hero-copy{position:relative; z-index:1; max-width:520px;}
+.hero-copy .eyebrow{color:var(--gold);}
+.hero-copy h1{font-family:var(--display); font-size:28px; margin:6px 0 8px;}
+.hero-copy p{font-family:var(--body); font-size:14px; color:#D9D6C8; margin:0;}
+
+.catalog-layout{display:grid; grid-template-columns:210px 1fr; gap:28px;}
+.filters h4{font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:1px; color:var(--ink-dim); margin:0 0 10px;}
+.cat-list{display:flex; flex-direction:column; gap:3px; margin-bottom:22px;}
+.cat-list button{text-align:left; background:none; border:1px solid transparent; border-radius:4px; padding:8px 10px; font-size:12.5px; color:var(--ink-dim); cursor:pointer; font-family:var(--mono);}
+.cat-list button.active{background:var(--card); border-color:var(--line); color:var(--ink); font-weight:700; border-left:3px solid var(--gold);}
+.cat-list button:hover{color:var(--ink);}
+.result-count{font-family:var(--mono); font-size:11.5px; color:var(--ink-dim); margin-bottom:14px;}
+
+.grid{display:grid; grid-template-columns:repeat(3, 1fr); gap:16px;}
+.card{
+  background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+  padding:14px; cursor:pointer; display:flex; flex-direction:column; gap:8px; position:relative;
+  transition:border-color .15s, transform .15s, box-shadow .15s;
+}
+.card:hover{border-color:var(--gold); transform:translateY(-3px); box-shadow:0 10px 24px rgba(28,37,65,0.10);}
+.card .sku-tag{position:absolute; top:-9px; right:10px; background:var(--ink); color:var(--paper); font-family:var(--mono); font-size:9.5px; padding:2px 6px; border-radius:2px; letter-spacing:.5px;}
+.card-icon{font-size:34px; height:64px; display:flex; align-items:center; justify-content:center; background:var(--paper); border:1px solid var(--line-soft); border-radius:4px;}
+.card-cat{font-family:var(--mono); font-size:10px; color:var(--wine); text-transform:uppercase; letter-spacing:.5px;}
+.card-title{font-weight:600; font-size:13.5px; line-height:1.35; font-family:var(--body);}
+.card-foot{display:flex; justify-content:space-between; align-items:center; margin-top:auto; padding-top:6px; border-top:1px dashed var(--line);}
+.card-price{font-family:var(--mono); font-weight:700; font-size:14.5px; color:var(--gold-dim);}
+.compare-row{margin:-2px 0 0; display:flex; align-items:baseline; gap:5px; font-family:var(--mono);}
+.compare-label{font-size:9.5px; color:var(--ink-dim); text-transform:uppercase; letter-spacing:.4px;}
+.compare-strike{font-family:var(--mono); font-size:11px; color:var(--ink-dim); text-decoration:line-through;}
+.pd-compare{font-family:var(--mono); font-size:12px; color:var(--ink-dim); margin-bottom:2px;}
+.add-btn{background:var(--ink); color:#fff; border:none; border-radius:4px; padding:7px 11px; font-size:11px; font-weight:700; cursor:pointer;}
+.add-btn:hover{background:var(--wine);}
+.low-stock{color:var(--wine); font-family:var(--mono); font-size:10px; font-weight:700;}
+.empty-state{text-align:center; padding:60px 10px; color:var(--ink-dim); font-family:var(--mono); font-size:13px;}
+
+footer{border-top:1px solid var(--line); padding:28px; text-align:center; font-family:var(--mono); font-size:11px; color:var(--ink-dim);}
+
+/* ---------- admin dashboard ---------- */
+.admin-table{width:100%; border-collapse:collapse; font-size:13px;}
+.admin-table th{text-align:left; font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.5px; color:var(--ink-dim); padding:8px 10px; border-bottom:1px solid var(--line);}
+.admin-table td{padding:9px 10px; border-bottom:1px solid var(--line-soft);}
+.admin-table tr.row-removed td{opacity:.5;}
+
+/* ---------- support chat widget ---------- */
+.chat-widget{position:fixed; right:22px; bottom:22px; z-index:60; display:flex; flex-direction:column; align-items:flex-end; gap:12px;}
+.chat-fab{position:relative; width:52px; height:52px; border-radius:50%; border:none; background:var(--wine); color:#fff; font-size:22px; cursor:pointer; box-shadow:0 10px 24px rgba(28,37,65,0.25);}
+.chat-fab:hover{background:var(--wine-dim);}
+.chat-fab-badge{position:absolute; top:-4px; right:-4px;}
+.chat-panel{width:300px; max-height:420px; display:flex; flex-direction:column; background:var(--card); border:1px solid var(--line); border-radius:8px; box-shadow:0 18px 46px rgba(28,37,65,0.2); overflow:hidden;}
+.chat-panel-head{display:flex; justify-content:space-between; align-items:center; padding:10px 14px; background:var(--ink); color:#F3EFE2; font-family:var(--display); font-weight:700; font-size:14px;}
+.chat-demo-tag{font-family:var(--mono); font-size:9px; text-transform:uppercase; letter-spacing:1px; color:var(--gold); font-weight:400; margin-left:6px;}
+.chat-close{background:none; border:none; color:#F3EFE2; cursor:pointer; font-size:14px;}
+.chat-thread{flex:1; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:8px; min-height:160px;}
+.chat-msg{font-size:12.5px; line-height:1.45; padding:8px 10px; border-radius:8px; max-width:85%;}
+.chat-msg.chat-bot{background:var(--paper); border:1px solid var(--line); align-self:flex-start;}
+.chat-msg.chat-user{background:var(--gold); color:#fff; align-self:flex-end;}
+.chat-quick{display:flex; flex-wrap:wrap; gap:6px; padding:0 12px 10px;}
+.chat-quick-btn{font-family:var(--mono); font-size:10.5px; background:none; border:1px solid var(--line); border-radius:999px; padding:5px 10px; cursor:pointer; color:var(--ink-dim);}
+.chat-quick-btn:hover{border-color:var(--gold); color:var(--ink);}
+.chat-input-row{display:flex; gap:8px; padding:10px 12px; border-top:1px solid var(--line);}
+.chat-input-row input{flex:1; border:1px solid var(--line); border-radius:4px; padding:8px 10px; font-size:13px; background:var(--paper);}
+.chat-input-row button{padding:8px 14px; font-size:12.5px;}
+.footer-care{font-family:var(--body); font-size:13.5px; color:var(--ink); margin-bottom:10px;}
+.footer-care a{color:var(--wine); font-weight:600; text-decoration:none;}
+.footer-care a:hover{text-decoration:underline;}
+.footer-links{display:flex; align-items:center; justify-content:center; gap:10px; flex-wrap:wrap; margin-bottom:14px; font-family:var(--body); font-size:12.5px;}
+.footer-links button{background:none; border:none; color:var(--ink-dim); cursor:pointer; font-family:inherit; font-size:inherit; padding:0; text-decoration:underline; text-underline-offset:2px;}
+.footer-links button:hover{color:var(--wine);}
+.footer-links .sep{color:var(--line); font-size:10px;}
+.policy-body{padding:26px 28px 30px; font-family:var(--body); font-size:13.5px; line-height:1.7; color:var(--ink-dim);}
+.policy-body h3{font-family:var(--display); font-size:20px; color:var(--ink); margin:0 0 14px;}
+.policy-body p{margin:0 0 12px;}
+.policy-body ul{margin:0 0 12px; padding-left:20px;}
+.policy-body li{margin-bottom:6px;}
+
+/* ---------- cart drawer ---------- */
+.overlay{position:fixed; inset:0; background:rgba(28,37,65,0.5); z-index:60; opacity:0; pointer-events:none; transition:opacity .2s;}
+.overlay.open{opacity:1; pointer-events:auto;}
+.drawer{position:fixed; top:0; right:-420px; width:400px; max-width:92vw; height:100%; background:var(--card); z-index:61; border-left:1px solid var(--line); display:flex; flex-direction:column; transition:right .28s ease;}
+.drawer.open{right:0;}
+.drawer-head{padding:18px 20px; border-bottom:1px dashed var(--line); display:flex; justify-content:space-between; align-items:center;}
+.drawer-head h3{font-family:var(--display); margin:0; font-size:18px;}
+.close-x{background:none; border:none; color:var(--ink-dim); font-size:18px; cursor:pointer;}
+.drawer-body{flex:1; overflow-y:auto; padding:14px 20px;}
+.cart-line{display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px dashed var(--line); font-size:13px;}
+.cart-line .cl-name{font-weight:600;}
+.cart-line .cl-meta{font-family:var(--mono); font-size:11px; color:var(--ink-dim);}
+.qty-ctrl{display:flex; align-items:center; gap:8px; font-family:var(--mono);}
+.qty-ctrl button{width:22px; height:22px; border-radius:4px; border:1px solid var(--line); background:none; color:var(--ink); cursor:pointer; font-size:12px;}
+.qty-ctrl .rm{border-color:var(--wine); color:var(--wine);}
+.drawer-foot{padding:16px 20px; border-top:1px solid var(--line);}
+.sum-row{display:flex; justify-content:space-between; font-size:13px; margin-bottom:6px; color:var(--ink-dim); font-family:var(--mono);}
+.sum-row.total{color:var(--ink); font-weight:700; font-size:15px; margin-top:8px; border-top:1px dashed var(--line); padding-top:8px;}
+.empty-note{text-align:center; padding:44px 10px; color:var(--ink-dim); font-size:13px; font-family:var(--mono);}
+
+/* ---------- modals ---------- */
+.modal-overlay{position:fixed; inset:0; background:rgba(28,37,65,0.55); z-index:70; display:none; align-items:center; justify-content:center; padding:20px;}
+.modal-overlay.open{display:flex;}
+.modal{background:var(--card); border:1px solid var(--line); border-radius:8px; max-width:640px; width:100%; max-height:88vh; overflow-y:auto; position:relative;}
+.modal-close{position:absolute; top:14px; right:14px; background:var(--paper); border:1px solid var(--line); color:var(--ink); width:28px; height:28px; border-radius:50%; cursor:pointer; font-size:14px; z-index:2;}
+.pd-wrap{padding:26px;}
+.pd-top{display:grid; grid-template-columns:180px 1fr; gap:22px; margin-bottom:18px;}
+.pd-icon{font-size:60px; height:180px; display:flex; align-items:center; justify-content:center; background:var(--paper); border:1px solid var(--line-soft); border-radius:6px;}
+.pd-cat{font-family:var(--mono); font-size:10.5px; color:var(--wine); text-transform:uppercase; letter-spacing:.6px; margin-bottom:4px;}
+.pd-title{font-family:var(--display); font-size:21px; margin:0 0 8px;}
+.pd-price{font-family:var(--mono); font-weight:700; font-size:19px; color:var(--gold-dim); margin-bottom:10px;}
+.pd-desc{font-size:13.5px; color:var(--ink-dim); line-height:1.55; margin-bottom:12px;}
+.pd-specs{border:1px dashed var(--line); border-radius:6px; padding:12px 14px; margin-bottom:18px;}
+.pd-actions{display:flex; align-items:center; gap:14px;}
+
+/* ---------- marketplace comparison (product modal) ---------- */
+.mp-compare{border:1px solid var(--line); border-radius:6px; padding:14px 16px; margin-bottom:18px; background:var(--paper);}
+.mp-compare h4{font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:1px; color:var(--ink-dim); margin:0 0 10px;}
+.mp-row{display:flex; justify-content:space-between; align-items:center; padding:7px 0; border-bottom:1px dashed var(--line); font-family:var(--mono); font-size:12.5px;}
+.mp-row:last-of-type{border-bottom:none;}
+.mp-name{color:var(--ink-dim);}
+.mp-price{color:var(--ink-dim);}
+.mp-us{background:rgba(184,146,61,0.1); margin:0 -16px; padding:9px 16px; border-bottom:none; border-radius:4px;}
+.mp-us .mp-name{color:var(--ink); font-weight:700;}
+.mp-us .mp-price{color:var(--gold-dim); font-weight:700; font-size:14px;}
+.mp-badge{display:inline-block; margin-left:8px; background:var(--wine); color:#fff; font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; padding:2px 6px; border-radius:3px; vertical-align:middle;}
+.mp-note{font-family:var(--body); font-size:10.5px; color:var(--ink-dim); margin-top:8px; line-height:1.5;}
+
+/* ---------- checkout ---------- */
+.checkout-grid{display:grid; grid-template-columns:1.3fr 1fr; gap:26px;}
+.pay-options{display:flex; flex-direction:column; gap:8px; margin-bottom:16px;}
+.pay-opt{border:1px solid var(--line); border-radius:5px; padding:11px 13px; cursor:pointer; font-size:13px; display:flex; align-items:center; gap:10px;}
+.pay-opt.active{border-color:var(--gold); background:#FBF6EA;}
+.summary-card{background:var(--card); border:1px solid var(--line); border-radius:6px; padding:18px;}
+.track-steps{display:flex; flex-direction:column; gap:0; margin:18px 0;}
+.track-step{display:flex; align-items:flex-start; gap:12px; position:relative; padding-bottom:22px;}
+.track-step:last-child{padding-bottom:0;}
+.track-step::before{content:""; position:absolute; left:8px; top:20px; bottom:0; width:2px; background:var(--line);}
+.track-step:last-child::before{display:none;}
+.track-dot{width:18px; height:18px; border-radius:50%; border:2px solid var(--line); background:#fff; flex:none; z-index:1;}
+.track-step.done .track-dot{background:var(--gold); border-color:var(--gold);}
+.track-step.current .track-dot{background:var(--wine); border-color:var(--wine);}
+.track-label{font-size:13px; font-weight:600;}
+.track-step.done .track-label, .track-step.current .track-label{color:var(--ink);}
+.track-step:not(.done):not(.current) .track-label{color:var(--ink-dim);}
+
+.order-card{border:1px solid var(--line); border-radius:6px; padding:16px 18px; margin-bottom:14px; background:var(--card);}
+.order-card .oc-head{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px;}
+.oc-id{font-family:var(--mono); font-size:11.5px; color:var(--ink-dim);}
+.oc-status{font-family:var(--mono); font-size:11px; color:#fff; background:var(--gold); padding:2px 8px; border-radius:999px;}
+.oc-status.pending{background:var(--wine);}
+
+.field-error{color:var(--wine); font-size:12px; font-family:var(--mono); margin-top:-10px; margin-bottom:14px;}
+
+/* ---------- analytics dashboard ---------- */
+.analytics-grid{display:grid; grid-template-columns:repeat(6, 1fr); gap:12px; margin-bottom:22px;}
+.stat-card{background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px;}
+.stat-card.stat-warn{border-color:var(--wine);}
+.stat-label{font-family:var(--mono); font-size:10px; text-transform:uppercase; letter-spacing:.6px; color:var(--ink-dim); margin-bottom:6px;}
+.stat-value{font-family:var(--display); font-weight:700; font-size:20px; color:var(--ink);}
+.stat-card.stat-warn .stat-value{color:var(--wine);}
+.bar-row{margin-bottom:14px;}
+.bar-row:last-child{margin-bottom:0;}
+.bar-row-head{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:5px; font-size:12.5px;}
+.bar-name{font-weight:600; color:var(--ink);}
+.bar-meta{font-family:var(--mono); font-size:11px; color:var(--ink-dim);}
+.bar-track{height:8px; border-radius:999px; background:var(--paper); border:1px solid var(--line-soft); overflow:hidden;}
+.bar-fill{height:100%; border-radius:999px; background:linear-gradient(90deg, var(--gold), var(--wine));}
+@media (max-width:820px){ .analytics-grid{grid-template-columns:repeat(3, 1fr);} }
+@media (max-width:520px){ .analytics-grid{grid-template-columns:repeat(2, 1fr);} }
+
+/* ---------- sell: category picture reference ---------- */
+.cat-ref-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(96px, 1fr)); gap:10px; margin-bottom:24px;}
+.cat-ref-card{background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:14px 8px 10px; display:flex; flex-direction:column; align-items:center; gap:8px; cursor:pointer; transition:border-color .15s, transform .15s, box-shadow .15s;}
+.cat-ref-card:hover{border-color:var(--gold); transform:translateY(-2px); box-shadow:0 8px 18px rgba(28,37,65,0.10);}
+.cat-ref-card svg{width:32px; height:32px;}
+.cat-ref-card span{font-family:var(--mono); font-size:9.5px; text-transform:uppercase; letter-spacing:.4px; color:var(--ink-dim); text-align:center; line-height:1.3;}
+
+.product-ref-section{margin-bottom:22px;}
+.product-ref-head{display:flex; align-items:center; gap:8px; margin-bottom:10px;}
+.product-ref-head svg{width:20px; height:20px; flex:none;}
+.product-ref-head h5{font-family:var(--display); font-weight:700; font-size:15px; margin:0; color:var(--ink);}
+.product-ref-grid{display:flex; flex-wrap:wrap; gap:8px;}
+.product-ref-chip{display:flex; align-items:center; gap:6px; background:var(--card); border:1px solid var(--line); border-radius:999px; padding:6px 12px 6px 8px; font-family:var(--body); font-size:12px; color:var(--ink);}
+.product-ref-chip .chip-icon{font-size:16px; line-height:1;}
+
+/* ---------- 3D interface layer ---------- */
+.grid{perspective:1400px;}
+.card{transform-style:preserve-3d; transition:transform .12s ease-out, box-shadow .15s, border-color .15s;}
+.card:hover{box-shadow:0 18px 34px rgba(28,37,65,0.16);}
+.card-icon{transition:transform .3s ease; transform-style:preserve-3d;}
+.card:hover .card-icon{animation:iconWobble3d 2.4s ease-in-out infinite;}
+.pd-icon{transform-style:preserve-3d; animation:iconWobble3d 4.5s ease-in-out infinite;}
+.auth-wrap .tower-silhouette{transform-style:preserve-3d; animation:floatTower3d 9s ease-in-out infinite;}
+.hero{perspective:900px;}
+.hero .tower-silhouette{transform-style:preserve-3d; animation:floatTower3d 8s ease-in-out infinite;}
+.brand .tower-mark, .auth-brand .tower-mark{transform-style:preserve-3d; transition:transform .4s ease;}
+header.topbar:hover .tower-mark, .auth-brand:hover .tower-mark{transform:rotateY(180deg);}
+.modal{animation:modalPop3d .28s ease-out;}
+.add-btn{transition:transform .15s ease, background .15s;}
+.add-btn:active{transform:scale(0.94) translateZ(-4px);}
+
+@keyframes iconWobble3d{
+  0%,100%{transform:rotateY(-14deg) translateZ(0);}
+  50%{transform:rotateY(14deg) translateZ(12px);}
+}
+@keyframes floatTower3d{
+  0%,100%{transform:translateY(0) rotateY(0deg);}
+  50%{transform:translateY(-12px) rotateY(10deg);}
+}
+@keyframes modalPop3d{
+  from{transform:perspective(900px) rotateX(8deg) scale(.94); opacity:0;}
+  to{transform:perspective(900px) rotateX(0) scale(1); opacity:1;}
+}
+
+@media (max-width:820px){
+  .catalog-layout{grid-template-columns:1fr;}
+  .grid{grid-template-columns:repeat(2,1fr);}
+  .checkout-grid{grid-template-columns:1fr;}
+  .pd-top{grid-template-columns:1fr;}
+}
+@media (max-width:520px){
+  .grid{grid-template-columns:1fr;}
+  nav.tabs{order:3; width:100%;}
+}
+
+@media (prefers-reduced-motion: reduce){
+  *{transition:none !important; animation:none !important; scroll-behavior:auto !important;}
+}
+
+/* ==========================================================================
+   Beautify pass — additive visual polish only. No layout, class, or
+   behavioural changes: every rule below refines existing selectors
+   (entrances, depth, rhythm, focus states) without altering markup or JS.
+   ========================================================================== */
+
+/* refined scrollbar, in keeping with the brass/ink palette */
+*{scrollbar-width:thin; scrollbar-color:var(--gold) var(--paper);}
+::-webkit-scrollbar{width:10px; height:10px;}
+::-webkit-scrollbar-track{background:var(--paper);}
+::-webkit-scrollbar-thumb{background:var(--line); border-radius:8px; border:2px solid var(--paper);}
+::-webkit-scrollbar-thumb:hover{background:var(--gold);}
+
+/* gentle entrance for content as it mounts */
+@keyframes riseIn{from{opacity:0; transform:translateY(10px);} to{opacity:1; transform:translateY(0);}}
+.card, .cat-ref-card, .order-card, .product-ref-chip{animation:riseIn .45s cubic-bezier(.2,.7,.3,1) both;}
+.auth-card{animation:riseIn .5s cubic-bezier(.2,.7,.3,1) both;}
+.hero{animation:riseIn .55s cubic-bezier(.2,.7,.3,1) both;}
+
+/* soft ambient glow behind the hero copy, echoing the brass accent */
+.hero{isolation:isolate;}
+.hero::before{
+  content:""; position:absolute; z-index:0; top:-90px; left:-60px; width:280px; height:280px;
+  background:radial-gradient(circle, rgba(184,146,61,0.35), transparent 70%);
+  filter:blur(10px); pointer-events:none;
+}
+.hero-copy h1{font-size:clamp(22px, 3vw, 30px); line-height:1.15;}
+
+/* section headings get a small brass underline flourish */
+.section-head{position:relative;}
+.section-head h1::after, .section-head h2::after{
+  content:""; display:block; width:38px; height:3px; margin-top:8px; border-radius:2px;
+  background:linear-gradient(90deg, var(--gold), var(--wine));
+}
+
+/* buttons: a touch more life on interaction, no shape/size change */
+.btn-gold, .btn-wine, .btn-ghost{transition:background .15s, transform .12s, box-shadow .15s;}
+.btn-gold:hover, .btn-wine:hover{transform:translateY(-1px); box-shadow:0 6px 16px rgba(28,37,65,0.18);}
+.btn-gold:active, .btn-wine:active, .btn-ghost:active{transform:translateY(0) scale(.98);}
+.add-btn{box-shadow:0 0 0 rgba(140,59,74,0); transition:transform .15s ease, background .15s, box-shadow .15s;}
+.add-btn:hover{box-shadow:0 4px 12px rgba(140,59,74,0.35);}
+
+/* consistent, visible keyboard focus across custom (non-native) controls */
+.icon-btn:focus-visible, .cat-list button:focus-visible, nav.tabs button:focus-visible,
+.footer-links button:focus-visible, .card:focus-visible, .cat-ref-card:focus-visible,
+.close-x:focus-visible, .modal-close:focus-visible, .pay-opt:focus-visible{
+  outline:2px solid var(--gold); outline-offset:2px; border-radius:4px;
+}
+
+/* ---------- WCAG 2.1 / ISO 9241-171 & ISO/IEC 40500 accessibility baseline ---------- */
+/* Generic focus-visible fallback so every interactive element gets a visible
+   keyboard focus indicator (WCAG 2.4.7 Focus Visible), even ones not listed above. */
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible,
+textarea:focus-visible, [tabindex]:focus-visible{
+  outline:2px solid var(--gold); outline-offset:2px;
+}
+/* Skip link (WCAG 2.4.1 Bypass Blocks) — hidden until keyboard-focused */
+.skip-link{
+  position:absolute; left:-9999px; top:auto; z-index:100;
+  background:var(--ink); color:#fff; padding:10px 16px; border-radius:4px;
+  font-family:var(--body); font-size:13px; font-weight:600; text-decoration:none;
+}
+.skip-link:focus{ left:12px; top:12px; }
+/* Visually-hidden text for screen readers only (WCAG 1.1.1 / 4.1.2) */
+.sr-only{
+  position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
+  clip:rect(0,0,0,0); white-space:nowrap; border:0;
+}
+
+/* ---------- SON / SONCAP compliance badge on product cards & detail ---------- */
+.cert-badge{
+  display:inline-flex; align-items:center; gap:4px; font-family:var(--mono);
+  font-size:9.5px; letter-spacing:.3px; color:var(--wine); background:rgba(140,59,74,0.08);
+  border:1px solid rgba(140,59,74,0.25); border-radius:3px; padding:2px 6px; white-space:nowrap;
+}
+.cert-badge svg{width:10px; height:10px; flex:none;}
+.pd-cert-row{
+  display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:8px; padding-top:8px;
+  border-top:1px dashed var(--line);
+}
+
+/* inputs feel a touch more tactile without changing their footprint */
+.field input, .field select, .field textarea{transition:border-color .15s, background .15s, box-shadow .15s;}
+.field input:hover, .field select:hover, .field textarea:hover{border-color:var(--gold-dim);}
+
+/* smoother drawer / modal motion curve */
+.drawer{transition:right .32s cubic-bezier(.2,.7,.3,1);}
+.overlay{transition:opacity .25s ease;}
+
+/* price emphasis: subtle warmth without new color */
+.card-price, .pd-price{text-shadow:0 1px 0 rgba(255,255,255,0.4);}
+
+/* footer brand tower gets the same quiet float as the hero's, for cohesion */
+footer{position:relative;}
+
+@media (prefers-reduced-motion: reduce){
+  .card, .cat-ref-card, .order-card, .product-ref-chip, .auth-card, .hero{animation:none !important;}
+}
+
+/* ---------- Quick Response chat widget ---------- */
+.qr-launcher{
+  position:fixed; right:24px; bottom:24px; z-index:80;
+  width:58px; height:58px; border-radius:50%; border:none; cursor:pointer;
+  background:var(--ink); color:#fff; display:flex; align-items:center; justify-content:center;
+  box-shadow:0 10px 26px rgba(28,37,65,0.35); transition:transform .18s ease, box-shadow .18s ease;
+}
+.qr-launcher:hover{transform:translateY(-2px) scale(1.04); box-shadow:0 14px 30px rgba(28,37,65,0.42);}
+.qr-launcher svg{width:24px; height:24px;}
+.qr-launcher .qr-badge{
+  position:absolute; top:-3px; right:-3px; background:var(--wine); color:#fff;
+  font-family:var(--mono); font-size:10px; font-weight:700; line-height:1;
+  width:18px; height:18px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+  border:2px solid var(--paper);
+}
+.qr-launcher .qr-close-icon{display:none;}
+.qr-launcher.open .qr-chat-icon{display:none;}
+.qr-launcher.open .qr-close-icon{display:block;}
+
+.qr-panel{
+  position:fixed; right:24px; bottom:94px; z-index:80;
+  width:340px; max-width:calc(100vw - 32px); max-height:min(520px, calc(100vh - 140px));
+  background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+  box-shadow:0 24px 60px rgba(28,37,65,0.28);
+  display:flex; flex-direction:column; overflow:hidden;
+  opacity:0; transform:translateY(14px) scale(.98); pointer-events:none;
+  transition:opacity .18s ease, transform .18s ease;
+}
+.qr-panel.open{opacity:1; transform:translateY(0) scale(1); pointer-events:auto;}
+
+.qr-head{
+  background:var(--ink); color:#fff; padding:16px 18px;
+  display:flex; align-items:center; gap:10px; flex:none;
+}
+.qr-head .tower-mark i{background:var(--gold);}
+.qr-head-text{display:flex; flex-direction:column; line-height:1.25;}
+.qr-head-text b{font-family:var(--display); font-size:15px; font-weight:700;}
+.qr-head-text span{font-family:var(--mono); font-size:10.5px; color:rgba(255,255,255,0.7); display:flex; align-items:center; gap:5px;}
+.qr-dot{width:7px; height:7px; border-radius:50%; background:#3FC97A; flex:none;}
+
+.qr-body{flex:1; overflow-y:auto; padding:14px; background:var(--paper); display:flex; flex-direction:column; gap:10px;}
+.qr-msg{max-width:86%; padding:9px 12px; border-radius:12px; font-size:13px; line-height:1.45;}
+.qr-msg.bot{background:var(--card); border:1px solid var(--line); border-bottom-left-radius:3px; align-self:flex-start; color:var(--ink);}
+.qr-msg.user{background:var(--ink); color:#fff; border-bottom-right-radius:3px; align-self:flex-end;}
+
+.qr-quick-replies{display:flex; flex-wrap:wrap; gap:6px; padding:0 14px 12px; background:var(--paper); flex:none;}
+.qr-chip{
+  font-family:var(--body); font-size:12px; font-weight:500; color:var(--ink);
+  background:var(--card); border:1px solid var(--line); border-radius:999px;
+  padding:7px 12px; cursor:pointer; transition:background .15s, border-color .15s;
+}
+.qr-chip:hover{background:var(--gold); border-color:var(--gold); color:#fff;}
+
+.qr-input-row{display:flex; gap:8px; padding:12px; border-top:1px solid var(--line); background:var(--card); flex:none;}
+.qr-input-row input{
+  flex:1; border:1px solid var(--line); border-radius:20px; padding:9px 14px;
+  font-family:var(--body); font-size:13px; background:var(--paper); color:var(--ink);
+}
+.qr-input-row input:focus{outline:2px solid var(--gold); outline-offset:1px; background:#fff;}
+.qr-send{
+  width:36px; height:36px; border-radius:50%; border:none; background:var(--wine); color:#fff;
+  display:flex; align-items:center; justify-content:center; cursor:pointer; flex:none;
+}
+.qr-send svg{width:16px; height:16px;}
+
+@media (max-width:480px){
+  .qr-panel{right:16px; left:16px; width:auto; bottom:88px;}
+  .qr-launcher{right:16px; bottom:16px;}
+}
+
+</style>
+</head>
+<body>
+
+<!-- Skip link — WCAG 2.4.1 / ISO/IEC 40500 bypass-blocks requirement -->
+<a href="#root" class="skip-link">Skip to main content</a>
+
+<!-- Reusable Eiffel Tower silhouette, referenced with <use> wherever the signature motif appears -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="eiffel-shape" viewBox="0 0 200 320">
+      <polygon points="100,0 104,112 140,112 112,190 160,320 40,320 88,190 60,112 96,112" />
+    </symbol>
+  </defs>
+</svg>
+
+<div id="root" role="main" aria-label="ElectroMart storefront"></div>
+
+<!-- ===================== Quick Response chat widget ===================== -->
+<button class="qr-launcher" id="qrLauncher" aria-label="Open quick response chat">
+  <svg class="qr-chat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+  <svg class="qr-close-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+  <span class="qr-badge" id="qrBadge">1</span>
+</button>
+
+<div class="qr-panel" id="qrPanel" role="dialog" aria-modal="false" aria-label="Quick response chat">
+  <div class="qr-head">
+    <div class="tower-mark"><i class="t1"></i><i class="t2"></i><i class="t3"></i><i class="t4"></i></div>
+    <div class="qr-head-text">
+      <b>ElectroMart Support</b>
+      <span><span class="qr-dot"></span>Quick Response — typically replies instantly</span>
+    </div>
+  </div>
+  <div class="qr-body" id="qrBody" aria-live="polite">
+    <div class="qr-msg bot">Hi there! 👋 I'm the ElectroMart quick-response assistant. Pick a topic below or type your question.</div>
+  </div>
+  <div class="qr-quick-replies" id="qrQuickReplies">
+    <button class="qr-chip" data-qr="track">📦 Track my order</button>
+    <button class="qr-chip" data-qr="return">↩️ Return / refund</button>
+    <button class="qr-chip" data-qr="payment">💳 Payment issue</button>
+    <button class="qr-chip" data-qr="seller">🏪 Become a seller</button>
+    <button class="qr-chip" data-qr="human">🧑‍💼 Talk to a human</button>
+  </div>
+  <div class="qr-input-row">
+    <input type="text" id="qrInput" placeholder="Type a message…" autocomplete="off">
+    <button class="qr-send" id="qrSend" aria-label="Send message">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+    </button>
+  </div>
+</div>
+
+<script>
+/* ==========================================================================
+   Quick Response chat widget — self-contained, sits outside #root so it
+   survives every re-render of the main app.
+   ========================================================================== */
+(function(){
+  const launcher = document.getElementById('qrLauncher');
+  const panel = document.getElementById('qrPanel');
+  const body = document.getElementById('qrBody');
+  const badge = document.getElementById('qrBadge');
+  const input = document.getElementById('qrInput');
+  const sendBtn = document.getElementById('qrSend');
+  const quickReplies = document.getElementById('qrQuickReplies');
+
+  const replies = {
+    track: "To track your order, open the ☰ menu → **My Orders**, then click any order for its live status timeline (Placed → Confirmed → Shipped → Delivered).",
+    return: "You can request a return or refund from **My Orders** → select the delivered item → \"Request Return\". Refunds are typically reviewed within 2–3 business days.",
+    payment: "For payment issues: check **My Orders** for the payment status first. If a charge didn't confirm, please don't retry immediately — contact us with your order ID and we'll verify it.",
+    seller: "Interested in selling on ElectroMart? Switch to a Seller account from your profile menu, then use **List a Product** to add your first item — our team reviews new listings before they go live.",
+    human: "Got it — I'll flag this for a real support agent. In the meantime, feel free to describe your issue here and it'll be waiting for them when they pick up the chat."
+  };
+
+  function addMessage(text, sender){
+    const div = document.createElement('div');
+    div.className = 'qr-msg ' + sender;
+    div.textContent = text;
+    body.appendChild(div);
+    body.scrollTop = body.scrollHeight;
+  }
+
+  function botReply(text){
+    setTimeout(() => addMessage(text, 'bot'), 450);
+  }
+
+  function togglePanel(forceOpen){
+    const willOpen = typeof forceOpen === 'boolean' ? forceOpen : !panel.classList.contains('open');
+    panel.classList.toggle('open', willOpen);
+    launcher.classList.toggle('open', willOpen);
+    if (willOpen){
+      badge.style.display = 'none';
+      setTimeout(() => input.focus(), 200);
+    }
+  }
+
+  launcher.addEventListener('click', () => togglePanel());
+
+  quickReplies.addEventListener('click', (e) => {
+    const chip = e.target.closest('.qr-chip');
+    if (!chip) return;
+    addMessage(chip.textContent.trim(), 'user');
+    botReply(replies[chip.dataset.qr] || "Thanks — someone from our team will follow up shortly!");
+  });
+
+  function handleSend(){
+    const val = input.value.trim();
+    if (!val) return;
+    addMessage(val, 'user');
+    input.value = '';
+    botReply("Thanks for reaching out! A member of the ElectroMart team will get back to you shortly. In the meantime, the quick topics above cover most common questions.");
+  }
+
+  sendBtn.addEventListener('click', handleSend);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') handleSend();
+  });
+
+  document.addEventListener('click', (e) => {
+    if (panel.classList.contains('open') && !panel.contains(e.target) && !launcher.contains(e.target)){
+      togglePanel(false);
+    }
+  });
+
+  /* WCAG 2.1.2 / ISO 40500 — Escape closes the quick-response panel, the cart
+     drawer, and any open modal, matching expected keyboard behaviour without
+     touching the app's own click-based close handlers. */
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (panel.classList.contains('open')){ togglePanel(false); return; }
+    const closeTarget = document.querySelector('.modal-overlay.open [data-action^="close-"]')
+      || (document.querySelector('.drawer.open') && document.querySelector('.drawer .close-x'));
+    if (closeTarget) closeTarget.click();
+  });
+})();
+</script>
+
+<script>
+/* ==========================================================================
+   ElectroMart — frontend application
+   Vanilla JS SPA. No build step, no framework, no server. All "API" calls
+   are served locally out of localStorage — see the LOCAL BACKEND block
+   below. Users, orders and stock all persist across reloads in this browser.
+   ========================================================================== */
+
+const root = document.getElementById('root');
+
+// The app opens straight on the storefront (guest browsing). Any previously
+// saved session token is ignored at load time (and cleared below), so login /
+// create-account is only asked for when the shopper presses Checkout.
+// Accounts, carts, and orders are unaffected.
+localStorage.removeItem('emp_token');
+localStorage.removeItem('emp_user');
+
+const initialUser = null;
+
+const state = {
+  token: null,
+  user: initialUser,
+  authOpen: false, // login/register modal — only opened from Checkout
+  authMode: 'login',
+  authError: '',
+  authBusy: false,
+
+  view: 'shop', // shop | orders | track | sell
+  products: [],
+  categories: [],
+  category: 'All',
+  search: '',
+  productsLoading: true,
+
+  myListings: [],
+  myListingsLoading: false,
+  listingBusy: false,
+  listingError: '',
+  listingOk: '',
+
+  analytics: null,
+  analyticsLoading: false,
+
+  allProducts: [], // unfiltered product list (catalog + every seller listing), used for cross-seller price comparison
+
+  cart: JSON.parse(localStorage.getItem(initialUser ? 'emp_cart_' + initialUser.id : 'emp_cart_guest') || '[]'),
+  cartOpen: false,
+
+  selectedProductId: null,
+
+  checkoutOpen: false,
+  checkoutBusy: false,
+  checkoutError: '',
+  paymentMethod: 'card',
+  address: '',
+  phone: '',
+  cardName: '',
+  cardNumber: '',
+  cardExpiry: '',
+  cardCvv: '',
+  lastOrder: null,
+
+  orders: [],
+  ordersLoading: false,
+
+  rrrDrafts: {},
+  rrrErrors: {},
+
+  trackInput: '',
+  trackResult: null,
+  trackError: '',
+
+  feedbackBusy: {},
+  returnForms: {},   // trackingId -> { type, reason, notes, agree }
+  returnErrors: {},
+  returnBusy: {},
+
+  infoModal: null,
+
+  adminReport: null,
+  adminListings: [],
+  adminUsers: [],
+  adminLoading: false,
+  adminTab: 'reports', // reports | listings | users
+
+  chatOpen: false,
+  chatUnread: 0,
+  chatMessages: [
+    { from: 'bot', text: "Hi! I'm the ElectroMart support bot (demo). Ask me about an order, delivery, returns, or payments — or tap a quick reply below." },
+  ],
+  chatDraft: '',
+};
+
+const POLICY_CONTENT = {
+  terms: {
+    title: 'Terms & Conditions',
+    body: `
+      <p>These Terms & Conditions govern your use of ElectroMart and any order you place with us. By creating an account, browsing, or placing an order, you agree to be bound by them. If you do not agree, please do not use this site.</p>
+      <ul>
+        <li>All prices are shown in Naira (₦), are inclusive of applicable taxes unless stated otherwise, and are subject to change without prior notice.</li>
+        <li>Orders are confirmed once payment is received; we reserve the right to refuse, limit, or cancel orders we suspect are fraudulent, erroneous, or in breach of these terms, with any payment taken refunded in full.</li>
+        <li>Product images, colours, and descriptions are for illustration only; slight variations from the physical product may occur.</li>
+        <li>Risk in goods passes to you on delivery; title passes once payment is received in full.</li>
+        <li>You must be at least 18 years old, or the age of majority in your jurisdiction, to place an order.</li>
+        <li>You agree to provide accurate, current delivery and contact details, and are responsible for keeping your account credentials confidential.</li>
+        <li>All content on this site — text, graphics, logos, and the ElectroMart brand mark — is our property or that of our licensors and may not be reproduced without permission.</li>
+        <li>To the fullest extent permitted by law, ElectroMart's liability for any claim relating to an order is limited to the value of that order.</li>
+        <li>These terms are governed by the laws of the Federal Republic of Nigeria. Continued use of this site constitutes acceptance of any future updates to these terms, which will be posted here with a revised effective date.</li>
+      </ul>
+    `,
+  },
+  privacy: {
+    title: 'Privacy Policy',
+    body: `
+      <p>This Privacy Policy explains how ElectroMart, as data controller, collects, uses, and protects your personal data. It is written to meet our obligations under the Nigeria Data Protection Act, 2023 (NDPA) and, for customers in the European Economic Area/UK, the General Data Protection Regulation (GDPR).</p>
+      <p><strong>What we collect</strong></p>
+      <ul>
+        <li>Identity and contact data: name, email, phone number, delivery address.</li>
+        <li>Order and transaction data: items purchased, order value, order history, tracking status.</li>
+        <li>Account data: login credentials (stored encrypted) and preferences.</li>
+        <li>Technical data collected automatically, such as device type and general usage patterns, to keep the service secure and working correctly.</li>
+        <li>We do not knowingly collect card or bank details directly — payments are handled by our payment processor under its own security and privacy standards.</li>
+      </ul>
+      <p><strong>Why we process it and our lawful basis</strong></p>
+      <ul>
+        <li>To fulfil and deliver your orders and provide customer support — necessary for performance of a contract with you.</li>
+        <li>To detect and prevent fraud, and to meet tax, accounting, and other legal obligations — necessary for compliance with a legal obligation, and our legitimate interest in keeping the marketplace safe.</li>
+        <li>To send order and delivery updates — necessary for performance of a contract; to send optional marketing updates, only where you have given consent, which you may withdraw at any time.</li>
+      </ul>
+      <p><strong>Sharing and retention</strong></p>
+      <ul>
+        <li>Your data is never sold. We share only what is necessary with delivery partners, payment processors, and IT service providers acting on our instructions, under written data-processing terms.</li>
+        <li>Where data is transferred outside Nigeria or the EEA/UK, we rely on adequate safeguards such as standard contractual clauses, consistent with NDPA and GDPR cross-border transfer requirements.</li>
+        <li>We keep personal data only as long as needed for the purposes above, or as required by tax and other applicable law, after which it is deleted or anonymised.</li>
+      </ul>
+      <p><strong>Your rights</strong></p>
+      <ul>
+        <li>Subject to applicable law, you may request access to, correction of, erasure of, or a portable copy of your data, and may object to or ask us to restrict certain processing.</li>
+        <li>Where processing relies on consent (e.g. marketing), you can withdraw it at any time without affecting the lawfulness of processing already carried out.</li>
+        <li>Nigerian users may lodge a complaint with the Nigeria Data Protection Commission (NDPC); EEA/UK users may lodge a complaint with their local supervisory authority.</li>
+        <li>To exercise any of these rights, contact us via our WhatsApp customer care line or the email address on this site; we aim to respond within the timeframes required by applicable law.</li>
+      </ul>
+      <p><strong>Security and cookies</strong></p>
+      <ul>
+        <li>We apply reasonable technical and organisational measures to protect your data and will notify affected users and, where required, the relevant regulator of any personal data breach as required by law.</li>
+        <li>This site uses essential cookies/local storage to keep you logged in and remember your cart; these do not track you across other sites.</li>
+      </ul>
+    `,
+  },
+  returns: {
+    title: 'Return & Refund Policy',
+    body: `
+      <p>We want you to be happy with your purchase. If an item arrives damaged, faulty, or different from what you ordered, or you simply change your mind, the options below apply in addition to your statutory consumer rights.</p>
+      <ul>
+        <li><strong>Change of mind:</strong> unopened, unused items in their original packaging may be returned within 7 days of delivery.</li>
+        <li><strong>Damaged, faulty, or incorrect items:</strong> contact us within 7 days of delivery; once confirmed, we cover return shipping and you may choose a refund, replacement, or exchange.</li>
+        <li>Items must be unused, in original packaging with all accessories, and accompanied by proof of purchase (order ID or receipt).</li>
+        <li>For hygiene and safety reasons, opened consumables and earphones/earbuds with broken hygiene seals cannot be returned unless faulty.</li>
+        <li>Approved returns are refunded to the original payment method within 5–10 business days after the returned item is received and inspected; exchanges are dispatched once inspection is complete.</li>
+        <li>Delivery fees are non-refundable for change-of-mind returns, except where the item itself was faulty or incorrect.</li>
+        <li>This policy does not affect any other rights you have under applicable Nigerian consumer protection law.</li>
+        <li>Reach out on our WhatsApp customer care line to start a return or check its status.</li>
+      </ul>
+    `,
+  },
+  requirements: {
+    title: 'Functional & Non-Functional Requirements',
+    body: `
+      <p>ElectroMart is a monolithic marketplace application: the storefront UI, the buyer/seller logic, and the local data layer are shipped and run as a single deployable unit (this page), rather than as separate services. It supports two account types — Buyers and Sellers — trading electronics on one shared platform.</p>
+      <p><strong>Functional Requirements</strong></p>
+      <ul>
+        <li><strong>Account registration &amp; role selection:</strong> a visitor can register with a name, email, phone and password, choosing an account type of either Buyer (to purchase products) or Seller (to list products for sale).</li>
+        <li><strong>Authentication:</strong> registered users can sign in and out; a signed-in session is remembered across page reloads.</li>
+        <li><strong>Product browsing:</strong> buyers can browse the full catalogue, filter by category, and search by keyword.</li>
+        <li><strong>Marketplace price comparison:</strong> each product shows its ElectroMart price alongside comparison prices from other marketplaces.</li>
+        <li><strong>Seller listings:</strong> seller accounts can publish new product listings (name, category, icon, price, stock, description), which immediately appear in the shared product catalogue for buyers, tagged with the seller's name; sellers can view all products they have listed.</li>
+        <li><strong>Cart management:</strong> buyers can add items to a cart, adjust quantities, remove items, and see a running subtotal, respecting available stock for both official and seller-listed products.</li>
+        <li><strong>Checkout &amp; payment:</strong> buyers can check out with a delivery address, phone number, and a choice of payment method (card, bank transfer, or pay on delivery), including card-detail and RRR-confirmation validation where applicable.</li>
+        <li><strong>Order placement &amp; stock updates:</strong> placing an order creates an order record, decrements stock for each purchased item — whether from the fixed catalogue or a seller listing — and generates a tracking ID.</li>
+        <li><strong>Order history &amp; tracking:</strong> buyers can view their past orders and their statuses, and track a package by tracking ID through a step-by-step delivery timeline that advances realistically over time rather than completing instantly.</li>
+        <li><strong>Post-delivery feedback:</strong> once an order's tracking timeline reaches "Delivered," the buyer is prompted to indicate whether they are satisfied with the order.</li>
+        <li><strong>Return &amp; refund request:</strong> if a buyer indicates dissatisfaction, they can submit a return &amp; refund request (issue type, reason, notes, and confirmation of the item's condition), which is only accepted within the 7-day window and conditions set out in the Return &amp; Refund Policy; the resulting request status is then visible on the order.</li>
+        <li><strong>Policies:</strong> Terms and Conditions, Privacy Policy, and Return &amp; Refund Policy are available from the footer at all times.</li>
+      </ul>
+      <p><strong>Non-Functional Requirements</strong></p>
+      <ul>
+        <li><strong>Architecture:</strong> the application is monolithic — a single self-contained web app bundling UI, application logic, and a local data layer, with no external service dependencies required to run.</li>
+        <li><strong>Performance:</strong> product search and category filtering should feel instant to the user, with search input debounced to avoid excessive re-rendering while typing.</li>
+        <li><strong>Usability:</strong> the interface should remain legible and operable on both desktop and mobile screen widths, with clear feedback (loading, error and success states) for every action.</li>
+        <li><strong>Reliability &amp; data integrity:</strong> stock levels must never go negative, an order should only be created once every line item's requested quantity has been validated against available stock, and an order's delivered date is fixed the first time it is observed as delivered so the return window cannot drift.</li>
+        <li><strong>Security:</strong> passwords are required to meet a minimum length; a user can only view and manage their own cart, orders, listings, delivery feedback, and return requests, never another user's.</li>
+        <li><strong>Availability/persistence:</strong> accounts, listings, stock levels, orders, delivery feedback, and return requests persist locally across browser sessions and reloads for the duration the browser data is retained.</li>
+        <li><strong>Maintainability:</strong> functional areas (authentication, catalogue, cart, checkout, tracking, delivery feedback, returns, seller listings) are organised into distinct, clearly named functions to keep the single-file application easy to extend.</li>
+        <li><strong>Compatibility:</strong> the application runs in modern evergreen browsers without requiring any additional plugins or installation.</li>
+        <li><strong>Legal &amp; regulatory compliance:</strong> data handling practices are documented in the Privacy Policy with reference to the Nigeria Data Protection Act, 2023 and, where applicable, the GDPR; return and refund handling is documented in, and enforced consistently with, the Return &amp; Refund Policy.</li>
+      </ul>
+    `,
+  },
+  standards: {
+    title: 'Quality, Certification & Standards Compliance',
+    body: `
+      <p>ElectroMart designs, builds, and operates this platform, and sources the products listed on it, with reference to recognised international (ISO/IEC) standards and applicable Standards Organisation of Nigeria (SON) requirements.</p>
+      <p><strong>Product certification (SON)</strong></p>
+      <ul>
+        <li>Regulated electronics and electrical items listed on ElectroMart are expected to carry valid <strong>SONCAP</strong> (Standards Organisation of Nigeria Conformity Assessment Programme) certification before they may be imported into or sold within Nigeria.</li>
+        <li>Applicable locally manufactured items carry the <strong>MANCAP</strong> (Mandatory Conformity Assessment Programme) mark, and regulated products display the Nigerian Industrial Standard (NIS) reference relevant to their category.</li>
+        <li>Sellers listing regulated electronics warrant that their products meet the relevant NIS/SON product standard for that category, and ElectroMart may request certificates of conformity at any time.</li>
+        <li>A product's certification badge (where shown) indicates the category is subject to SON conformity requirements; it is not a substitute for checking the physical product's certification mark on arrival.</li>
+      </ul>
+      <p><strong>Quality management (ISO 9001)</strong></p>
+      <ul>
+        <li>Platform processes — order handling, seller onboarding, returns, and customer support — are organised in line with the quality-management principles of <strong>ISO 9001</strong>: documented policies, defined responsibilities, and continual improvement based on customer feedback.</li>
+      </ul>
+      <p><strong>Information security (ISO/IEC 27001)</strong></p>
+      <ul>
+        <li>Account, order, and payment-related data are handled with reference to the information-security management principles of <strong>ISO/IEC 27001</strong>: access is restricted to a user's own data, sessions are authenticated, and security practices are reviewed periodically.</li>
+        <li>This complements, and does not replace, the data-protection commitments set out in our Privacy Policy under the Nigeria Data Protection Act, 2023 and GDPR.</li>
+      </ul>
+      <p><strong>Software quality (ISO/IEC 25010)</strong></p>
+      <ul>
+        <li>The application is developed with reference to the <strong>ISO/IEC 25010</strong> software quality model — covering functional suitability, reliability, usability, performance efficiency, and maintainability — as reflected in the Functional &amp; Non-Functional Requirements document.</li>
+      </ul>
+      <p><strong>Accessibility (ISO/IEC 40500 · WCAG 2.1)</strong></p>
+      <ul>
+        <li>The interface follows <strong>ISO/IEC 40500</strong> (which adopts the Web Content Accessibility Guidelines, WCAG 2.1), including a skip-to-content link, visible keyboard focus indicators, descriptive labels on icon-only controls, and dialog roles on modals and drawers so they work with screen readers and keyboard navigation.</li>
+      </ul>
+      <p style="font-size:12px; color:var(--ink-dim);">This page is a good-faith statement of the standards this demo platform is designed with reference to; it is not a certification body and does not itself issue SONCAP, MANCAP, or ISO certificates.</p>
+    `,
+  },
+};
+
+function fmt(naira) {
+  return '₦' + Number(naira).toLocaleString('en-NG');
+}
+
+// Illustrative-only "typical marketplace price" used for the compare badge below.
+// This is a fixed markup applied to our own price for display purposes — it is
+// NOT pulled from Konga, Jumia, or any other live source. See the disclaimer
+// in the footer.
+const COMPARE_MARKUP = 0.16;
+function comparePriceFor(price) {
+  return Math.round((price * (1 + COMPARE_MARKUP)) / 1000) * 1000;
+}
+
+// ---------- marketplace price comparison ----------
+// Illustrative-only "other marketplace" listings shown alongside our own price,
+// so the shop reads as a marketplace where several storefronts carry the same
+// item. Each competitor price is a deterministic markup on our own price —
+// NOT live data pulled from Konga, Jumia, AliExpress, or any other retailer.
+// See the disclaimer in the footer.
+const MARKETPLACES = ['Konga', 'Jumia', 'AliExpress', 'Slot', 'Jiji'];
+
+function seededUnit(seed) {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) { h = (h * 31 + seed.charCodeAt(i)) >>> 0; }
+  return (h % 1000) / 1000; // 0 – 0.999, stable per seed
+}
+
+// Every listed competitor is always priced above ElectroMart's price
+// (markup range: +9% to +34%), so ElectroMart is always the cheapest.
+function competitorPricesFor(product) {
+  return MARKETPLACES.map((name) => {
+    const markup = 0.09 + seededUnit(product.id + '|' + name) * 0.25;
+    const price = Math.round((product.price * (1 + markup)) / 500) * 500;
+    return { name, price };
+  }).sort((a, b) => a.price - b.price);
+}
+
+function cheapestCompetitor(product) {
+  return competitorPricesFor(product)[0];
+}
+
+// Demo bank details shown for the "Bank transfer" payment option.
+const BANK_TRANSFER_DETAILS = {
+  bankName: 'Providus Bank',
+  accountName: 'ElectroMart Nigeria Ltd',
+  accountNumber: '0123456789',
+};
+
+function cartKey() {
+  return state.user ? 'emp_cart_' + state.user.id : 'emp_cart_guest';
+}
+
+function persistCart() {
+  localStorage.setItem(cartKey(), JSON.stringify(state.cart));
+}
+
+function saveSession(token, user) {
+  state.token = token;
+  state.user = user;
+  localStorage.setItem('emp_token', token);
+  localStorage.setItem('emp_user', JSON.stringify(user));
+  state.cart = JSON.parse(localStorage.getItem('emp_cart_' + user.id) || '[]');
+}
+
+function clearSession() {
+  state.token = null;
+  state.user = null;
+  localStorage.removeItem('emp_token');
+  localStorage.removeItem('emp_user');
+  state.cart = [];
+}
+
+/* ============================ LOCAL BACKEND ================================
+   Stands in for a server. Everything lives under one localStorage key and is
+   read/written synchronously; api() just wraps it with a small artificial
+   delay so the UI's loading states still feel real.
+   ========================================================================== */
+
+/* ========================= DATA EXCHANGE STANDARD ===========================
+   Every call to api() below exchanges data in one consistent, documented
+   shape, so the "client" (the render/state code) and the "server" (this
+   local backend) agree on a contract even though both live in the same file:
+
+     Transport : synchronous local call standing in for HTTPS; UTF-8 JSON,
+                 mirroring `fetch()` semantics (method, path, JSON body).
+     Encoding  : all bodies are JSON.stringify'd going in, JSON.parse'd on
+                 the way out — the same as a real REST/JSON API over HTTP.
+     Success   : api() *returns* the resource directly (a User, Product[],
+                 Order, etc.) — no extra envelope wrapper.
+     Error     : api() *throws* an Error shaped as ApiError below; the caller
+                 always reads err.message and (optionally) err.status, the
+                 same pattern a caller uses for a rejected fetch().
+     Versioning: DATA_EXCHANGE_STANDARD.version — bump this if a schema
+                 below changes shape in a way older clients couldn't read.
+
+   The JSON Schema (draft 2020-12 style) definitions below describe the
+   resources actually returned by api() today. validateResource() is a
+   lightweight, non-blocking structural check against them — used where
+   noted to catch shape drift during development without ever interrupting
+   the demo, since this is a contract for consistency, not a hard gate.
+   ========================================================================== */
+const DATA_EXCHANGE_STANDARD = {
+  version: '1.0',
+  encoding: 'application/json; charset=utf-8',
+  schemas: {
+    User: {
+      type: 'object',
+      required: ['id', 'name', 'email', 'role'],
+      properties: {
+        id: { type: 'string' }, name: { type: 'string' }, email: { type: 'string' },
+        phone: { type: 'string' }, role: { type: 'string', enum: ['buyer', 'seller', 'admin'] },
+      },
+    },
+    Product: {
+      type: 'object',
+      required: ['id', 'sku', 'category', 'name', 'price', 'stock'],
+      properties: {
+        id: { type: 'string' }, sku: { type: 'string' }, category: { type: 'string' },
+        name: { type: 'string' }, price: { type: 'number' }, stock: { type: 'number' },
+        description: { type: 'string' }, sellerName: { type: 'string' },
+      },
+    },
+    Order: {
+      type: 'object',
+      required: ['id', 'trackingId', 'items', 'total', 'status'],
+      properties: {
+        id: { type: 'string' }, trackingId: { type: 'string' }, items: { type: 'array' },
+        total: { type: 'number' }, status: { type: 'string' }, createdAt: { type: 'number' },
+      },
+    },
+    ApiError: {
+      type: 'object',
+      required: ['message'],
+      properties: { message: { type: 'string' }, status: { type: 'number' } },
+    },
+  },
+};
+
+// Structural, non-throwing validator: checks required fields and primitive
+// types against a DATA_EXCHANGE_STANDARD.schemas entry. Returns a report
+// rather than throwing, so it can be used to flag drift (console.warn) in
+// development without ever breaking a demo checkout.
+function validateResource(schemaName, data) {
+  const schema = DATA_EXCHANGE_STANDARD.schemas[schemaName];
+  if (!schema) return { valid: true, errors: [] };
+  const errors = [];
+  const items = Array.isArray(data) ? data : [data];
+  for (const item of items) {
+    if (typeof item !== 'object' || item === null) { errors.push(`${schemaName}: expected an object`); continue; }
+    for (const field of schema.required || []) {
+      if (!(field in item)) errors.push(`${schemaName}: missing required field "${field}"`);
+    }
+    for (const [field, def] of Object.entries(schema.properties || {})) {
+      if (item[field] === undefined) continue;
+      if (def.type === 'number' && typeof item[field] !== 'number') errors.push(`${schemaName}.${field}: expected number`);
+      if (def.type === 'string' && typeof item[field] !== 'string') errors.push(`${schemaName}.${field}: expected string`);
+      if (def.enum && !def.enum.includes(item[field])) errors.push(`${schemaName}.${field}: expected one of ${def.enum.join('/')}`);
+    }
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+const DB_KEY = 'emp_db_v1';
+
+const CATALOG = [
+  { id:'p1',  sku:'EMP-LT-01', category:'Laptops',     icon:'💻', name:'Aster 14 UltraBook',      price:1085000, stock:6,  description:'A 14" magnesium-alloy ultrabook built for travel — all-day battery, fanless in light use, and a display bright enough for Lagos afternoons.', specs:{ 'Display':'14" 2.8K OLED', 'CPU':'8-core, 3.8GHz', 'RAM':'16GB', 'Storage':'512GB SSD', 'Battery':'Up to 18h' } },
+  { id:'p2',  sku:'EMP-LT-02', category:'Laptops',     icon:'💻', name:'Forge 15 Creator',        price:1640000, stock:3,  description:'A discrete-GPU workstation for editing, rendering and heavier creative work, with a colour-accurate panel out of the box.', specs:{ 'Display':'15.6" QHD 165Hz', 'CPU':'8-core, 4.2GHz', 'GPU':'8GB dedicated', 'RAM':'32GB', 'Storage':'1TB SSD' } },
+  { id:'p3',  sku:'EMP-LT-03', category:'Laptops',     icon:'💻', name:'Voyage Air 13',           price:695000,  stock:11, description:'The lightest laptop in the lineup — 1.1kg, silent, and built for writers, students and anyone who lives out of a bag.', specs:{ 'Display':'13.3" FHD', 'CPU':'6-core, 3.2GHz', 'RAM':'8GB', 'Storage':'256GB SSD', 'Weight':'1.1kg' } },
+  { id:'p4',  sku:'EMP-PH-01', category:'Smartphones', icon:'📱', name:'Lumen X7',                price:820000,  stock:14, description:'Flagship cameras, a bright always-on display, and two full days of typical use on a single charge.', specs:{ 'Display':'6.7" AMOLED 120Hz', 'Storage':'256GB', 'RAM':'12GB', 'Camera':'50MP triple', 'Battery':'5000mAh' } },
+  { id:'p5',  sku:'EMP-PH-02', category:'Smartphones', icon:'📱', name:'Lumen X7 mini',            price:640000,  stock:9,  description:'Same generation, smaller body — for anyone who wants flagship performance without a phablet in their pocket.', specs:{ 'Display':'6.1" AMOLED 120Hz', 'Storage':'128GB', 'RAM':'8GB', 'Camera':'48MP dual', 'Battery':'4200mAh' } },
+  { id:'p6',  sku:'EMP-PH-03', category:'Smartphones', icon:'📱', name:'Fielder Rugged 5G',        price:410000,  stock:20, description:'IP68-rated and drop-tested to 1.8m — built for construction sites, farms and anywhere a normal phone wouldn\u2019t survive.', specs:{ 'Display':'6.3" LCD', 'Storage':'128GB', 'RAM':'6GB', 'Rating':'IP68 / MIL-STD-810H', 'Battery':'6000mAh' } },
+  { id:'p7',  sku:'EMP-AU-01', category:'Audio',       icon:'🎧', name:'Halo ANC Headphones',      price:265000,  stock:17, description:'Over-ear noise cancelling headphones tuned for long commutes and open-plan offices, with 40 hours of playback.', specs:{ 'Type':'Over-ear, ANC', 'Battery':'40h', 'Bluetooth':'5.3', 'Weight':'250g' } },
+  { id:'p8',  sku:'EMP-AU-02', category:'Audio',       icon:'🎧', name:'Pebble True Wireless',     price:98000,   stock:26, description:'Compact true-wireless earbuds with a stable fit for workouts and a case that tops up two extra full charges.', specs:{ 'Type':'In-ear, ANC', 'Battery':'6h + 24h case', 'Bluetooth':'5.3', 'Water rating':'IPX4' } },
+  { id:'p9',  sku:'EMP-AU-03', category:'Audio',       icon:'🔊', name:'Boombox Go Speaker',       price:145000,  stock:2,  description:'A rugged party-in-a-bag speaker with genuinely loud, bass-forward sound and 20 hours off one charge.', specs:{ 'Output':'40W', 'Battery':'20h', 'Water rating':'IPX7', 'Bluetooth':'5.2' } },
+  { id:'p10', sku:'EMP-CM-01', category:'Cameras',     icon:'📷', name:'Frame One Mirrorless',     price:1290000, stock:4,  description:'An APS-C mirrorless body for anyone moving up from phone photography — fast autofocus, and a kit lens included.', specs:{ 'Sensor':'26MP APS-C', 'Video':'4K 60fps', 'Lens':'18-55mm kit', 'Stabilisation':'5-axis IBIS' } },
+  { id:'p11', sku:'EMP-CM-02', category:'Cameras',     icon:'📹', name:'Trailcam Action 4K',       price:225000,  stock:15, description:'Waterproof to 10m without a housing — built for bikes, boats, and anywhere a regular camera can\u2019t go.', specs:{ 'Video':'4K 60fps', 'Waterproof':'10m', 'Battery':'2h continuous', 'Mounts':'Standard action-cam' } },
+  { id:'p12', sku:'EMP-GM-01', category:'Gaming',      icon:'🎮', name:'Ranger Pro Controller',    price:78000,   stock:22, description:'A wireless controller with swappable stick modules and haptic triggers, compatible with PC and most consoles.', specs:{ 'Connection':'Bluetooth + 2.4GHz dongle', 'Battery':'30h', 'Compatibility':'PC, most consoles' } },
+  { id:'p13', sku:'EMP-GM-02', category:'Gaming',      icon:'🖥️', name:'Arc 27 Gaming Monitor',     price:485000,  stock:7,  description:'A 27" 165Hz panel with a fast response time, tuned for competitive play without ghosting.', specs:{ 'Size':'27"', 'Resolution':'2560x1440', 'Refresh':'165Hz', 'Panel':'IPS' } },
+  { id:'p14', sku:'EMP-AC-01', category:'Accessories', icon:'🔌', name:'PowerCube 100W GaN Charger', price:52000,  stock:31, description:'A pocket-sized four-port charger that can top up a laptop and two phones at once without melting your bag.', specs:{ 'Output':'100W max', 'Ports':'2x USB-C, 2x USB-A', 'Tech':'GaN' } },
+  { id:'p15', sku:'EMP-AC-02', category:'Accessories', icon:'🖱️', name:'Glide Wireless Mouse',      price:34000,   stock:0,  description:'A quiet-click wireless mouse with a 6-month battery life and a scroll wheel that free-spins on demand.', specs:{ 'Connection':'Bluetooth + 2.4GHz', 'Battery':'6 months (AA)', 'DPI':'up to 4000' } },
+  { id:'p16', sku:'EMP-AC-03', category:'Accessories', icon:'🎒', name:'Transit 20L Laptop Backpack', price:61000, stock:18, description:'A weatherproof daily-carry bag with a padded 16" laptop sleeve and a luggage strap for travel days.', specs:{ 'Capacity':'20L', 'Laptop sleeve':'Up to 16"', 'Material':'Water-resistant ripstop' } },
+  { id:'p17', sku:'EMP-TB-01', category:'Tablets',      icon:'📲', name:'Slate 11 Tablet',           price:545000,  stock:9,  description:'An 11" tablet fast enough for real productivity — split-screen apps, stylus support, and a display sharp enough for design work on the go.', specs:{ 'Display':'11" 2K LCD 120Hz', 'CPU':'8-core', 'RAM':'8GB', 'Storage':'256GB', 'Stylus':'Sold separately' } },
+  { id:'p18', sku:'EMP-TB-02', category:'Tablets',      icon:'📲', name:'Slate 11 Keyboard Case',    price:87000,   stock:16, description:'Turns the Slate 11 into a laptop-alike — magnetic attach, backlit keys, and a kickstand hinge that holds any angle.', specs:{ 'Compatibility':'Slate 11 Tablet', 'Keys':'Backlit, full-size', 'Trackpad':'Yes' } },
+  { id:'p19', sku:'EMP-TB-03', category:'Accessories',  icon:'✏️', name:'Slate Stylus Pen',          price:56000,   stock:24, description:'A pressure-sensitive stylus for the Slate 11 with near-zero lag, magnetic charging, and tilt shading for sketching.', specs:{ 'Compatibility':'Slate 11 Tablet', 'Charging':'Magnetic, wireless', 'Battery':'Up to 2 weeks' } },
+  { id:'p20', sku:'EMP-WR-01', category:'Wearables',    icon:'⌚', name:'Pulse Fit Watch',           price:265000,  stock:13, description:'A fitness-first smartwatch with round-the-clock heart rate, sleep tracking, and five days of battery between charges.', specs:{ 'Display':'1.4" AMOLED', 'Battery':'5 days typical', 'Water rating':'5ATM', 'Sensors':'HR, SpO2, GPS' } },
+  { id:'p21', sku:'EMP-WR-02', category:'Accessories',  icon:'⌚', name:'Pulse Fit Extra Strap',     price:19000,   stock:40, description:'A spare silicone strap for the Pulse Fit Watch — quick-release pins mean no tools needed to swap it.', specs:{ 'Compatibility':'Pulse Fit Watch', 'Material':'Silicone', 'Sizes':'S/M and M/L included' } },
+  { id:'p22', sku:'EMP-WR-03', category:'Accessories',  icon:'🔌', name:'Pulse Fit Charging Dock',   price:22000,   stock:21, description:'A magnetic charging puck for the Pulse Fit Watch that doubles as a bedside stand overnight.', specs:{ 'Compatibility':'Pulse Fit Watch', 'Cable':'USB-C, 1m included' } },
+  { id:'p23', sku:'EMP-TV-01', category:'TV & Home',    icon:'📺', name:'Vista 55" 4K Smart TV',     price:1350000, stock:5,  description:'A 55" 4K HDR panel with built-in streaming apps and three HDMI 2.1 ports for next-gen consoles.', specs:{ 'Size':'55"', 'Resolution':'4K HDR', 'Refresh':'120Hz', 'HDMI':'3x HDMI 2.1' } },
+  { id:'p24', sku:'EMP-TV-02', category:'TV & Home',    icon:'🔊', name:'Vista Soundbar 2.1',        price:225000,  stock:10, description:'A wireless soundbar and subwoofer pair built to match the Vista TV, with a dedicated movie-dialogue mode.', specs:{ 'Channels':'2.1', 'Subwoofer':'Wireless', 'Inputs':'HDMI ARC, optical, Bluetooth' } },
+  { id:'p25', sku:'EMP-TV-03', category:'Accessories',  icon:'📺', name:'Tilt Wall Mount 32–65"',    price:38000,   stock:27, description:'A tilting wall bracket rated for TVs up to 65", with cable channels built into the arm.', specs:{ 'Compatibility':'32"–65" TVs', 'Tilt':'-5° to +15°', 'VESA':'up to 400x400' } },
+  { id:'p26', sku:'EMP-SH-01', category:'Smart Home',   icon:'🔈', name:'Nimbus Smart Speaker',      price:135000,  stock:14, description:'A voice-controlled speaker that doubles as a smart home hub — pairs with the Nimbus Smart Plugs out of the box.', specs:{ 'Voice assistant':'Built-in', 'Hub':'Zigbee + Wi-Fi', 'Audio':'Full-range driver + tweeter' } },
+  { id:'p27', sku:'EMP-SH-02', category:'Accessories',  icon:'🔌', name:'Nimbus Smart Plug (2-pack)', price:31000,  stock:0,  description:'Wi-Fi smart plugs that work with the Nimbus Smart Speaker or standalone through the app — schedule anything with a wall outlet.', specs:{ 'Compatibility':'Nimbus Smart Speaker or standalone', 'Max load':'2300W', 'Pack size':'2' } },
+  { id:'p28', sku:'EMP-SH-03', category:'Smart Home',   icon:'🔔', name:'Aperture Video Doorbell',   price:118000,  stock:12, description:'A battery or wired video doorbell with night vision and package-detection alerts sent straight to your phone.', specs:{ 'Video':'1080p HDR', 'Power':'Battery or wired', 'Storage':'Local, no subscription required' } },
+  { id:'p29', sku:'EMP-NW-01', category:'Networking',   icon:'📶', name:'Meshway 3-Pack Wi-Fi 6 Router', price:195000, stock:8, description:'Whole-home mesh Wi-Fi 6 covering up to 550m² across three nodes, set up entirely from a phone app.', specs:{ 'Standard':'Wi-Fi 6', 'Coverage':'Up to 550m²', 'Nodes':'3', 'Ports':'2x Gigabit per node' } },
+  { id:'p30', sku:'EMP-NW-02', category:'Accessories',  icon:'🔌', name:'Ethernet Cable 10m (Cat 6)', price:9500,   stock:60, description:'A 10-metre Cat 6 cable for running a wired backhaul between mesh nodes or to a games console.', specs:{ 'Category':'Cat 6', 'Length':'10m', 'Shielding':'Unshielded (UTP)' } },
+  { id:'p31', sku:'EMP-DR-01', category:'Drones',       icon:'🚁', name:'Skyframe Mini Drone',       price:385000,  stock:6,  description:'A sub-250g drone with a stabilised 4K camera and 30 minutes of flight time — light enough to skip some registration rules.', specs:{ 'Weight':'249g', 'Camera':'4K, 3-axis gimbal', 'Flight time':'30 min', 'Range':'10km' } },
+  { id:'p32', sku:'EMP-DR-02', category:'Accessories',  icon:'🔋', name:'Skyframe Spare Battery',    price:62000,   stock:19, description:'A drop-in spare battery for the Skyframe Mini Drone — keep one charging while the other flies.', specs:{ 'Compatibility':'Skyframe Mini Drone', 'Flight time added':'~30 min', 'Charge time':'55 min' } },
+  { id:'p33', sku:'EMP-DR-03', category:'Accessories',  icon:'🎒', name:'Skyframe Carry Case',       price:29000,   stock:23, description:'A hard-shell case shaped for the Skyframe drone, its controller, and two spare batteries.', specs:{ 'Compatibility':'Skyframe Mini Drone', 'Capacity':'Drone + controller + 2 batteries', 'Shell':'EVA hard-shell' } },
+  { id:'p34', sku:'EMP-PR-01', category:'Printers',     icon:'🖨️', name:'InkFlow Home Printer',      price:112000,  stock:11, description:'A compact wireless inkjet with refillable tanks, built to keep per-page cost low for everyday home printing.', specs:{ 'Type':'Refillable-tank inkjet', 'Connectivity':'Wi-Fi, USB', 'Functions':'Print, scan, copy' } },
+  { id:'p35', sku:'EMP-PR-02', category:'Accessories',  icon:'🖨️', name:'InkFlow Ink Refill Kit',    price:16000,   stock:34, description:'A four-colour refill kit sized for the InkFlow Home Printer\u2019s tanks, good for roughly 6,000 pages.', specs:{ 'Compatibility':'InkFlow Home Printer', 'Colours':'4 (CMYK)', 'Page yield':'~6,000 pages' } },
+  { id:'p36', sku:'EMP-AC-04', category:'Accessories',  icon:'🔋', name:'PowerBank 20000mAh',        price:44000,   stock:28, description:'A slim 20,000mAh power bank with fast pass-through charging — enough for roughly three full phone charges.', specs:{ 'Capacity':'20000mAh', 'Output':'22.5W fast charge', 'Ports':'1x USB-C, 1x USB-A' } },
+  { id:'p37', sku:'EMP-AC-05', category:'Accessories',  icon:'🛡️', name:'Universal Screen Protector (2-pack)', price:8500, stock:45, description:'Tempered-glass screen protectors with an oleophobic coating that resists fingerprints, fitted for most phone models.', specs:{ 'Material':'Tempered glass', 'Pack size':'2', 'Coating':'Oleophobic (anti-fingerprint)' } },
+  { id:'p38', sku:'EMP-AC-06', category:'Accessories',  icon:'🔌', name:'USB-C to HDMI Adapter',     price:14500,   stock:37, description:'Mirrors a laptop or phone to any HDMI display or projector — handy for the Slate 11, Aster 14, or any USB-C phone.', specs:{ 'Output':'HDMI, up to 4K@60Hz', 'Compatibility':'Any USB-C device with DisplayPort Alt Mode' } },
+  { id:'p39', sku:'EMP-LT-04', category:'Laptops', icon:'💻', name:'Halcyon 16 Business', price:980000, stock:9, description:'A matte-black 16" business laptop with a spill-resistant keyboard and a fingerprint reader built into the power button.', specs:{ 'Display':'16" WQXGA', 'CPU':'8-core, 3.6GHz', 'RAM':'16GB', 'Storage':'512GB SSD', 'Security':'Fingerprint + TPM' } },
+  { id:'p40', sku:'EMP-LT-05', category:'Laptops', icon:'💻', name:'Nomad 2-in-1 Convertible', price:745000, stock:7, description:'A 360-hinge convertible that folds flat into a tablet, with an active pen included for notes and sketches.', specs:{ 'Display':'13.5" 2K touch', 'CPU':'6-core, 3.4GHz', 'RAM':'16GB', 'Storage':'512GB SSD', 'Pen':'Included' } },
+  { id:'p41', sku:'EMP-LT-06', category:'Laptops', icon:'💻', name:'Ridge 17 Studio', price:1980000, stock:2, description:'A 17" content-creation laptop with a colour-calibrated panel and enough thermal headroom for sustained render jobs.', specs:{ 'Display':'17" 4K', 'CPU':'10-core, 4.4GHz', 'GPU':'12GB dedicated', 'RAM':'32GB', 'Storage':'2TB SSD' } },
+  { id:'p42', sku:'EMP-PH-04', category:'Smartphones', icon:'📱', name:'Lumen X7 Pro', price:1080000, stock:6, description:'The top of the Lumen line — a periscope zoom lens, a titanium frame, and satellite SOS for off-grid emergencies.', specs:{ 'Display':'6.8" AMOLED 144Hz', 'Storage':'512GB', 'RAM':'16GB', 'Camera':'50MP quad', 'Battery':'5400mAh' } },
+  { id:'p43', sku:'EMP-PH-05', category:'Smartphones', icon:'📱', name:'Budget Wave 4G', price:225000, stock:31, description:'An affordable everyday phone with a big battery and a display bright enough to read outdoors.', specs:{ 'Display':'6.5" HD+', 'Storage':'64GB', 'RAM':'4GB', 'Camera':'13MP dual', 'Battery':'5000mAh' } },
+  { id:'p44', sku:'EMP-PH-06', category:'Smartphones', icon:'📱', name:'Lumen Flip', price:890000, stock:8, description:'A folding phone that closes to pocket-sized, with a cover screen for quick replies without opening it.', specs:{ 'Display':'6.7" foldable + 3.4" cover', 'Storage':'256GB', 'RAM':'12GB', 'Hinge rating':'300,000 folds' } },
+  { id:'p45', sku:'EMP-AU-04', category:'Audio', icon:'🎙️', name:'Broadcast USB Microphone', price:96000, stock:13, description:'A cardioid USB condenser mic for streaming, voiceover and calls, with a built-in headphone jack for zero-latency monitoring.', specs:{ 'Pattern':'Cardioid', 'Connection':'USB-C', 'Sample rate':'48kHz/24-bit', 'Mount':'Desktop stand included' } },
+  { id:'p46', sku:'EMP-AU-05', category:'Audio', icon:'🎧', name:'Studio Reference Headphones', price:178000, stock:10, description:'Wired over-ear monitors tuned flat for mixing, with a detachable cable and swappable earpads.', specs:{ 'Type':'Over-ear, wired', 'Impedance':'38 ohm', 'Frequency range':'5Hz–40kHz', 'Cable':'Detachable, 3m' } },
+  { id:'p47', sku:'EMP-AU-06', category:'Audio', icon:'🔊', name:'Bookshelf Speaker Pair', price:310000, stock:6, description:'A powered bookshelf pair with a built-in amp — plug in a turntable, TV or phone and skip the separate receiver.', specs:{ 'Power':'2x50W', 'Inputs':'RCA, optical, Bluetooth', 'Drivers':'5.25" woofer + 1" tweeter' } },
+  { id:'p48', sku:'EMP-AU-07', category:'Audio', icon:'🎚️', name:'2-Channel USB Audio Interface', price:86000, stock:14, description:'A compact interface for recording vocals or instruments straight into a laptop, with phantom power for condenser mics.', specs:{ 'Inputs':'2x XLR/TRS combo', 'Phantom power':'48V', 'Connection':'USB-C', 'Monitoring':'Direct zero-latency' } },
+  { id:'p49', sku:'EMP-CM-03', category:'Cameras', icon:'📷', name:'Frame One Prime Lens 35mm', price:245000, stock:9, description:'A fast prime lens for the Frame One system, ideal for low-light and portrait work with a smooth background blur.', specs:{ 'Mount':'Frame One mount', 'Aperture':'f/1.8', 'Focal length':'35mm (APS-C)' } },
+  { id:'p50', sku:'EMP-CM-04', category:'Cameras', icon:'📷', name:'Pocket Vlog Camera', price:365000, stock:12, description:'A palm-sized camera with a flip-out screen and built-in stabilisation, built for one-handed vlogging.', specs:{ 'Sensor':'1"-type', 'Video':'4K 30fps', 'Stabilisation':'Electronic + gimbal', 'Screen':'Flip-out touch' } },
+  { id:'p51', sku:'EMP-CM-05', category:'Cameras', icon:'📷', name:'Studio Tripod 170cm', price:58000, stock:20, description:'An aluminium tripod with a fluid head and quick-release plate, tall enough for standing shots without extending the legs fully.', specs:{ 'Max height':'170cm', 'Material':'Aluminium', 'Head':'Fluid, quick-release plate', 'Load capacity':'5kg' } },
+  { id:'p52', sku:'EMP-GM-03', category:'Gaming', icon:'🎮', name:'Mechanical Gaming Keyboard', price:96000, stock:18, description:'A hot-swappable mechanical keyboard with per-key RGB and a detachable USB-C cable for travel.', specs:{ 'Switches':'Hot-swappable mechanical', 'Backlight':'Per-key RGB', 'Connection':'USB-C, wired' } },
+  { id:'p53', sku:'EMP-GM-04', category:'Gaming', icon:'🖱️', name:'Precision Gaming Mouse', price:48000, stock:24, description:'A lightweight gaming mouse with a high-accuracy sensor and side buttons that can be remapped per game profile.', specs:{ 'Sensor':'26,000 DPI optical', 'Weight':'62g', 'Buttons':'6 programmable', 'Connection':'Wired + 2.4GHz' } },
+  { id:'p54', sku:'EMP-GM-05', category:'Gaming', icon:'🎧', name:'Gaming Headset Surround', price:112000, stock:16, description:'A closed-back gaming headset with virtual surround sound and a boom mic that flips up to mute.', specs:{ 'Sound':'7.1 virtual surround', 'Mic':'Flip-to-mute boom', 'Connection':'USB / 3.5mm' } },
+  { id:'p55', sku:'EMP-GM-06', category:'Gaming', icon:'🕹️', name:'Arcade Fight Stick', price:135000, stock:5, description:'A tournament-style fight stick with Sanwa-style parts, built for fighting-game players who want console-grade feel.', specs:{ 'Buttons':'8 + start/select', 'Stick':'Sanwa-style lever', 'Compatibility':'PC, most consoles' } },
+  { id:'p56', sku:'EMP-TB-04', category:'Tablets', icon:'📲', name:'Slate 8 Mini Tablet', price:345000, stock:15, description:'A pocketable 8" tablet for reading, browsing and media, light enough to hold one-handed for hours.', specs:{ 'Display':'8" 2K LCD', 'CPU':'6-core', 'RAM':'6GB', 'Storage':'128GB' } },
+  { id:'p57', sku:'EMP-TB-05', category:'Tablets', icon:'📲', name:'Slate 11 Pro', price:845000, stock:6, description:'The higher-tier Slate with a brighter mini-LED display and a faster chip for multitasking-heavy workflows.', specs:{ 'Display':'11" mini-LED 120Hz', 'CPU':'10-core', 'RAM':'12GB', 'Storage':'512GB' } },
+  { id:'p58', sku:'EMP-WR-04', category:'Wearables', icon:'⌚', name:'Pulse Kids Watch', price:98000, stock:17, description:'A rugged, GPS-enabled smartwatch built for kids, with parent-controlled calling and a school-hours focus mode.', specs:{ 'GPS':'Yes', 'Calling':'Parent-approved contacts only', 'Water rating':'IPX7', 'Battery':'2 days typical' } },
+  { id:'p59', sku:'EMP-WR-05', category:'Wearables', icon:'🕶️', name:'Aura Smart Glasses', price:385000, stock:7, description:'Everyday-looking glasses with open-ear audio and a voice assistant, built for calls and music without earbuds.', specs:{ 'Audio':'Open-ear directional', 'Battery':'6h continuous playback', 'Weight':'45g', 'Charging case':'Included' } },
+  { id:'p60', sku:'EMP-TV-04', category:'TV & Home', icon:'📺', name:'Vista 65" 4K Smart TV', price:2150000, stock:3, description:'The larger Vista panel, with the same HDR tuning and streaming apps as the 55", built for bigger living rooms.', specs:{ 'Size':'65"', 'Resolution':'4K HDR', 'Refresh':'120Hz', 'HDMI':'3x HDMI 2.1' } },
+  { id:'p61', sku:'EMP-TV-05', category:'TV & Home', icon:'📽️', name:'Beamline Mini Projector', price:268000, stock:9, description:'A compact 1080p projector with autofocus and keystone correction, set up in under a minute on any wall.', specs:{ 'Resolution':'1080p native', 'Brightness':'700 ANSI lumens', 'Autofocus':'Yes', 'Speakers':'Built-in 2x5W' } },
+  { id:'p62', sku:'EMP-TV-06', category:'TV & Home', icon:'🎬', name:'Streaming Media Stick 4K', price:42000, stock:33, description:'A 4K streaming stick with a voice remote, bringing every major app to any HDMI TV.', specs:{ 'Resolution':'4K HDR', 'Remote':'Voice-enabled', 'Storage':'8GB internal' } },
+  { id:'p63', sku:'EMP-SH-04', category:'Smart Home', icon:'💡', name:'Nimbus Smart Bulb (4-pack)', price:36000, stock:29, description:'Colour-changing Wi-Fi bulbs that work with the Nimbus Speaker or standalone, with schedules and scenes in the app.', specs:{ 'Type':'Wi-Fi RGBW bulb', 'Pack size':'4', 'Compatibility':'Nimbus Speaker or standalone' } },
+  { id:'p64', sku:'EMP-SH-05', category:'Smart Home', icon:'🌡️', name:'Climate Smart Thermostat', price:142000, stock:8, description:'A learning thermostat that builds a schedule around your habits and can be adjusted remotely from the app.', specs:{ 'Learning mode':'Yes', 'Connectivity':'Wi-Fi', 'Compatibility':'Most central HVAC systems' } },
+  { id:'p65', sku:'EMP-SH-06', category:'Smart Home', icon:'📷', name:'Indoor Security Camera', price:76000, stock:22, description:'A 1080p indoor camera with two-way audio and motion alerts sent straight to your phone.', specs:{ 'Video':'1080p', 'Audio':'Two-way', 'Storage':'Local microSD, no subscription required', 'Field of view':'130°' } },
+  { id:'p66', sku:'EMP-NW-03', category:'Networking', icon:'📶', name:'Pocket Wi-Fi Hotspot 5G', price:128000, stock:14, description:'A pocket-sized 5G hotspot with a full day of battery, good for travel or as backup internet.', specs:{ 'Standard':'5G / 4G LTE', 'Battery':'Up to 12h', 'Connected devices':'Up to 16' } },
+  { id:'p67', sku:'EMP-NW-04', category:'Networking', icon:'🔌', name:'8-Port Gigabit Switch', price:34000, stock:25, description:'An unmanaged gigabit switch for expanding a home network — plug and play, no configuration needed.', specs:{ 'Ports':'8x Gigabit', 'Management':'Unmanaged, plug and play', 'Power':'External adapter included' } },
+  { id:'p68', sku:'EMP-DR-04', category:'Drones', icon:'🚁', name:'Skyframe Pro Drone', price:780000, stock:4, description:'A larger sibling to the Skyframe Mini with obstacle avoidance and a longer 40-minute flight time for serious aerial work.', specs:{ 'Weight':'790g', 'Camera':'4K, 3-axis gimbal', 'Flight time':'40 min', 'Obstacle avoidance':'4-directional' } },
+  { id:'p69', sku:'EMP-PR-03', category:'Printers', icon:'🖨️', name:'LabelFlow Compact Label Printer', price:54000, stock:18, description:'A compact thermal label printer for parcels, pantry jars or barcodes, with no ink cartridges to replace.', specs:{ 'Type':'Direct thermal, no ink', 'Connectivity':'Bluetooth, USB', 'Max label width':'4 inches' } },
+  { id:'p70', sku:'EMP-AC-07', category:'Accessories', icon:'🎒', name:'Everyday 15L Backpack', price:42000, stock:30, description:'A slimmer daily bag with a padded 14" laptop sleeve, built for commuting rather than travel.', specs:{ 'Capacity':'15L', 'Laptop sleeve':'Up to 14"', 'Material':'Water-resistant nylon' } },
+  { id:'p71', sku:'EMP-AC-08', category:'Accessories', icon:'🔌', name:'Car Fast Charger Dual-Port', price:15500, stock:42, description:'A dual-port car charger with fast-charge on both ports, so driver and passenger can top up at once.', specs:{ 'Output':'Total 45W', 'Ports':'2x USB-C', 'Compatibility':'12V/24V vehicles' } },
+  { id:'p72', sku:'EMP-AC-09', category:'Accessories', icon:'🧴', name:'Screen Cleaning Kit', price:7200, stock:52, description:'A microfibre cloth and alcohol-free spray kit safe for phone, laptop and camera screens.', specs:{ 'Includes':'Spray bottle + 2 microfibre cloths', 'Safe for':'Coated and anti-glare screens' } },
+  { id:'p73', sku:'EMP-AC-10', category:'Accessories', icon:'🔋', name:'PowerBank 10000mAh Slim', price:26000, stock:38, description:'A credit-card-thin power bank that slips into a pocket, good for one full phone charge.', specs:{ 'Capacity':'10000mAh', 'Output':'18W fast charge', 'Thickness':'12mm' } },
+  { id:'p74', sku:'EMP-AC-11', category:'Accessories', icon:'🖥️', name:'Laptop Stand Adjustable', price:23000, stock:27, description:'An aluminium laptop stand that raises the screen to eye level and folds flat for a bag.', specs:{ 'Material':'Aluminium', 'Adjustment':'6 height positions', 'Foldable':'Yes' } },
+  { id:'p75', sku:'EMP-AC-12', category:'Accessories', icon:'⌨️', name:'Compact Wireless Keyboard', price:29000, stock:24, description:'A tenkeyless wireless keyboard that pairs with up to three devices and switches between them with one key.', specs:{ 'Layout':'Tenkeyless', 'Connection':'Bluetooth, 3-device pairing', 'Battery':'Up to 3 months' } },
+  { id:'p76', sku:'EMP-AC-13', category:'Accessories', icon:'🎥', name:'Webcam 1080p with Privacy Cover', price:38000, stock:21, description:'A plug-and-play 1080p webcam with autofocus and a sliding privacy cover built into the housing.', specs:{ 'Resolution':'1080p 30fps', 'Field of view':'78°', 'Mic':'Built-in stereo' } },
+  { id:'p77', sku:'EMP-AC-14', category:'Accessories', icon:'🔦', name:'Rechargeable LED Torch', price:13500, stock:33, description:'A pocket torch with three brightness modes and a USB-C charging port, no batteries needed.', specs:{ 'Brightness':'Up to 1000 lumens', 'Charging':'USB-C', 'Modes':'High / low / strobe' } },
+  { id:'p78', sku:'EMP-AC-15', category:'Accessories', icon:'🧲', name:'MagSafe-Style Wireless Charger', price:21000, stock:36, description:'A magnetic wireless charging puck that snaps into place and charges compatible phones at full wireless speed.', specs:{ 'Output':'15W max', 'Alignment':'Magnetic snap-fit', 'Cable':'USB-C, 1.2m included' } },
+  { id:'p79', sku:'EMP-AC-16', category:'Accessories', icon:'🎒', name:'Camera Sling Bag', price:48000, stock:14, description:'A weatherproof sling bag with dividers for a camera body and two lenses, worn across the chest for quick access.', specs:{ 'Capacity':'1 body + 2 lenses', 'Material':'Water-resistant canvas', 'Access':'Side quick-access zip' } },
+  { id:'p80', sku:'EMP-AC-17', category:'Accessories', icon:'🔌', name:'Universal Travel Adapter', price:19500, stock:40, description:'A single adapter covering UK, EU, US and AU sockets, with two USB-A ports for charging small devices.', specs:{ 'Sockets covered':'UK, EU, US, AU', 'USB ports':'2x USB-A', 'Rating':'Up to 2500W' } },
+  { id:'p81', sku:'EMP-AC-18', category:'Accessories', icon:'🖱️', name:'Vertical Ergonomic Mouse', price:36000, stock:19, description:'A vertical mouse that keeps the wrist in a handshake position, aimed at reducing strain during long sessions.', specs:{ 'Design':'Vertical, ergonomic', 'Connection':'Wireless 2.4GHz', 'DPI':'800/1200/1600 switchable' } },
+  { id:'p82', sku:'EMP-AC-19', category:'Accessories', icon:'🧰', name:'Precision Repair Tool Kit', price:32000, stock:17, description:'A 32-piece kit with magnetic bits, spudgers and tweezers for phone, laptop and console repairs.', specs:{ 'Pieces':'32', 'Includes':'Bits, spudgers, tweezers, case', 'Use':'Phone, laptop, console repair' } },
+  { id:'p83', sku:'EMP-AC-20', category:'Accessories', icon:'🎧', name:'In-Ear Monitor Earphones (Wired)', price:54000, stock:16, description:'Wired in-ear monitors with a detachable cable, popular with musicians for stage and studio monitoring.', specs:{ 'Type':'In-ear, wired', 'Drivers':'Dual balanced armature', 'Cable':'Detachable, 1.2m' } },
+  { id:'p84', sku:'EMP-AC-21', category:'Accessories', icon:'📦', name:'Cable Organiser Pouch', price:9800, stock:48, description:'A padded zip pouch with elastic loops for cables, chargers and small adapters — keeps a bag tangle-free.', specs:{ 'Compartments':'3 elastic loops + 1 mesh pocket', 'Material':'Padded nylon' } },
+  { id:'p85', sku:'EMP-AC-22', category:'Accessories', icon:'🔌', name:'7-in-1 USB-C Hub', price:44000, stock:26, description:'A compact hub adding HDMI, two USB-A ports, an SD card reader and pass-through charging to any USB-C laptop.', specs:{ 'Ports':'HDMI, 2x USB-A, SD/microSD, USB-C PD', 'Output':'HDMI up to 4K@30Hz' } },
+  { id:'p86', sku:'EMP-AC-23', category:'Accessories', icon:'🎙️', name:'Lavalier Clip Microphone', price:17500, stock:23, description:'A clip-on lav mic with a long cable, suited to interviews and presentations recorded on a phone or camera.', specs:{ 'Connection':'3.5mm TRRS', 'Cable length':'6m', 'Pickup pattern':'Omnidirectional' } },
+  { id:'p87', sku:'EMP-AC-24', category:'Accessories', icon:'🖥️', name:'Dual Monitor Arm', price:58000, stock:12, description:'A gas-spring arm mounting two monitors side by side, freeing up desk space and allowing full height/tilt adjustment.', specs:{ 'Mounts':'2 monitors up to 27" each', 'Adjustment':'Height, tilt, swivel', 'Mount type':'Desk clamp + grommet' } },
+  { id:'p88', sku:'EMP-AC-25', category:'Accessories', icon:'🧳', name:'Hard-Shell Laptop Sleeve 14"', price:19000, stock:31, description:'A rigid-shell sleeve that protects a 14" laptop from drops and knocks inside a bigger bag.', specs:{ 'Fit':'Up to 14" laptops', 'Shell':'EVA hard case', 'Interior':'Soft microfibre lining' } },
+  { id:'p89', sku:'EMP-AC-26', category:'Accessories', icon:'🔋', name:'Solar Power Bank 20000mAh', price:52000, stock:18, description:'A rugged power bank with a fold-out solar panel for topping up slowly off-grid, plus a built-in torch.', specs:{ 'Capacity':'20000mAh', 'Solar input':'Trickle-charge panel', 'Extras':'Built-in LED torch' } },
+  { id:'p90', sku:'EMP-AC-27', category:'Accessories', icon:'🎮', name:'Phone Gaming Controller Clip-On', price:39000, stock:20, description:'A Bluetooth controller that clips around a phone, turning it into a handheld console for cloud and mobile gaming.', specs:{ 'Connection':'Bluetooth', 'Compatibility':'Most phones up to 8.5cm wide', 'Battery':'20h' } },
+  { id:'p91', sku:'EMP-AC-28', category:'Accessories', icon:'🧴', name:'Laptop Cleaning & Care Kit', price:11500, stock:35, description:'A keyboard-safe cleaning kit with a brush, air blower and screen-safe spray for regular laptop maintenance.', specs:{ 'Includes':'Air blower, brush, spray, cloth', 'Safe for':'Keyboards and coated screens' } },
+  { id:'p92', sku:'EMP-AC-29', category:'Accessories', icon:'📱', name:'Phone Ring Light Clip', price:8600, stock:44, description:'A clip-on LED ring light with adjustable brightness, useful for video calls and content shot on a phone.', specs:{ 'Power':'USB-C rechargeable', 'Brightness levels':'3 (warm/cool/mixed)', 'Clip range':'Up to 3cm thick' } },
+  { id:'p93', sku:'EMP-AC-30', category:'Accessories', icon:'🔌', name:'65W GaN Wall Charger Single Port', price:21500, stock:39, description:'A compact single-port charger that can fast-charge a laptop or phone from one small brick.', specs:{ 'Output':'65W max, USB-C PD', 'Tech':'GaN', 'Size':'Passport-sized' } },
+  { id:'p94', sku:'EMP-AC-31', category:'Accessories', icon:'🎒', name:'Camera Rain Cover', price:6500, stock:29, description:'A lightweight rain cover that fits over most mirrorless cameras with a lens attached, packs down to pocket size.', specs:{ 'Compatibility':'Most mirrorless bodies + lens', 'Material':'Waterproof ripstop', 'Packed size':'Pocket-sized' } },
+  { id:'p95', sku:'EMP-AC-32', category:'Accessories', icon:'🖱️', name:'Mouse Pad XL Desk Mat', price:12500, stock:37, description:'An extra-large desk mat covering keyboard and mouse, with a stitched edge and non-slip rubber base.', specs:{ 'Size':'900x400mm', 'Surface':'Smooth cloth top', 'Base':'Non-slip rubber' } },
+  { id:'p96', sku:'EMP-AC-33', category:'Accessories', icon:'🔌', name:'USB-C to USB-C Cable 2m (100W)', price:8200, stock:55, description:'A braided 2-metre USB-C cable rated for 100W charging and fast data transfer between devices.', specs:{ 'Length':'2m', 'Power delivery':'Up to 100W', 'Build':'Braided, reinforced ends' } },
+  { id:'p97', sku:'EMP-AC-34', category:'Accessories', icon:'🎧', name:'Headphone Stand with USB Hub', price:24500, stock:20, description:'A weighted headphone stand with a built-in 3-port USB hub, keeping a desk tidy while headphones sit ready.', specs:{ 'Ports':'3x USB-A', 'Base':'Weighted, non-slip', 'Compatibility':'Most headphone headbands' } },
+  { id:'p98', sku:'EMP-AC-35', category:'Accessories', icon:'🔋', name:'AA Rechargeable Battery Pack (8-pack)', price:14500, stock:41, description:'Eight high-capacity rechargeable AA batteries with a compact charger, for controllers, mice and remotes.', specs:{ 'Pack size':'8x AA', 'Capacity':'2600mAh each', 'Charger':'Included, 4-bay' } },
+  { id:'p99', sku:'EMP-AC-36', category:'Accessories', icon:'🧳', name:'Tech Travel Organiser Case', price:17000, stock:26, description:'A compact case with elastic loops and mesh pockets for cables, dongles and a power bank, sized for a carry-on.', specs:{ 'Compartments':'Elastic loops + 2 mesh pockets', 'Material':'Water-resistant nylon' } },
+  { id:'p100', sku:'EMP-AC-37', category:'Accessories', icon:'🖥️', name:'Portable Monitor 15.6" USB-C', price:215000, stock:9, description:'A slim USB-C portable monitor that powers and displays from a single cable, folding flat with its cover for travel.', specs:{ 'Size':'15.6"', 'Resolution':'1920x1080', 'Connection':'USB-C (power + video)', 'Weight':'780g' } },
+];
+
+function loadDB() {
+  try {
+    const raw = localStorage.getItem(DB_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (_) { /* corrupt, fall through to fresh db */ }
+  const fresh = { users: [ADMIN_SEED()], orders: [], stock: {}, listings: [] };
+  localStorage.setItem(DB_KEY, JSON.stringify(fresh));
+  return fresh;
+}
+function ADMIN_SEED() {
+  return { id: 'admin_1', name: 'Site Admin', email: 'admin@electromart.demo', phone: '', password: 'Admin#2026', role: 'admin', disabled: false };
+}
+function saveDB(db) {
+  if (!Array.isArray(db.listings)) db.listings = []; // upgrade older saved DBs that predate the marketplace "sell" feature
+  if (!Array.isArray(db.users)) db.users = [];
+  if (!db.users.some((u) => u.role === 'admin')) db.users.push(ADMIN_SEED()); // upgrade older saved DBs that predate the admin dashboard
+  localStorage.setItem(DB_KEY, JSON.stringify(db));
+}
+
+function apiError(message, status) {
+  const err = new Error(message);
+  err.status = status || 400;
+  return err;
+}
+function publicUser(u) { return { id: u.id, name: u.name, email: u.email, phone: u.phone || '', role: u.role || 'buyer' }; }
+function allListings(db) { return Array.isArray(db.listings) ? db.listings : []; }
+function findProduct(db, productId) {
+  const catalogItem = CATALOG.find((p) => p.id === productId);
+  if (catalogItem) return { product: catalogItem, isListing: false };
+  const listing = allListings(db).find((p) => p.id === productId);
+  if (listing) return { product: listing, isListing: true };
+  return { product: null, isListing: false };
+}
+
+/* ===================== CREDENTIAL VALIDATION ALGORITHM =====================
+   Username (email) and password checking, in one place so both /auth/register
+   and /auth/login apply the same rules consistently.
+
+   Email check: a pragmatic RFC 5322-style pattern — one @, no whitespace,
+   at least one dot in the domain part. Deliberately not the full RFC grammar
+   (nothing practical needs to be), just enough to catch real typos.
+
+   Password strength check: a small scoring algorithm, O(1) — password length
+   is bounded, so this always runs in constant time per call. It walks the
+   string once and increments a score for each character class present
+   (lowercase / uppercase / digit / symbol), then combines that with length:
+     - under MIN_PASSWORD_LENGTH chars           -> rejected outright
+     - meets length but only 1 character class    -> "weak"
+     - meets length, 2 classes                    -> "medium"
+     - meets length, 3+ classes (or 12+ chars)     -> "strong"
+   This mirrors common guidance (NIST SP 800-63B / OWASP ASVS): prioritise
+   length, then require a mix of character classes, rather than an arbitrary
+   "must contain a special character" rule alone.
+   ========================================================================== */
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MIN_PASSWORD_LENGTH = 8;
+
+function isValidEmail(email) {
+  return EMAIL_PATTERN.test(String(email || '').trim());
+}
+
+function passwordStrength(password) {
+  const pw = String(password || '');
+  let classes = 0;
+  if (/[a-z]/.test(pw)) classes++;
+  if (/[A-Z]/.test(pw)) classes++;
+  if (/[0-9]/.test(pw)) classes++;
+  if (/[^A-Za-z0-9]/.test(pw)) classes++;
+  if (pw.length < MIN_PASSWORD_LENGTH) return { score: 0, label: 'too short', classes };
+  if (classes <= 1) return { score: 1, label: 'weak', classes };
+  if (classes === 2 && pw.length < 12) return { score: 2, label: 'medium', classes };
+  return { score: 3, label: 'strong', classes };
+}
+
+// Used by /auth/register (full check) and /auth/login (format check only —
+// login deliberately does not enforce strength, since rejecting a login on
+// "your existing password isn't strong enough" is a poor, and non-standard,
+// user experience; strength is only gated at the point a password is chosen).
+function validateCredentials(email, password, { checkStrength } = {}) {
+  const errors = [];
+  if (!isValidEmail(email)) errors.push('Please enter a valid email address.');
+  if (checkStrength) {
+    const strength = passwordStrength(password);
+    if (strength.score === 0) errors.push(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+    else if (strength.score === 1) errors.push('Password is too weak — mix in uppercase, numbers, or symbols.');
+  } else if (!password) {
+    errors.push('Password is required.');
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+/* ===================== O(n) PRODUCT LOOKUP INDEX =====================
+   findProduct() above is O(n) per call (it scans CATALOG, then listings).
+   Placing an order with m cart lines used to call it once per line, i.e.
+   m x O(n) = O(n*m) work — effectively O(n^2) when cart size tracks
+   catalog size. buildProductIndex() instead does one O(n) pass over the
+   full catalog + listings to build a Map, so each of the m lookups
+   afterwards is O(1) — total cost drops to O(n + m). See its use in the
+   "/orders" POST handler below.
+   ========================================================================== */
+function buildProductIndex(db) {
+  const index = new Map(); // productId -> { product, isListing }
+  for (const p of CATALOG) index.set(p.id, { product: p, isListing: false });
+  for (const l of allListings(db)) index.set(l.id, { product: l, isListing: true });
+  return index;
+}
+function makeToken(userId) { return `local.${userId}.${Math.random().toString(36).slice(2)}`; }
+function userIdFromToken(token) {
+  if (!token) return null;
+  const parts = token.split('.');
+  return parts.length === 3 && parts[0] === 'local' ? parts[1] : null;
+}
+function stockFor(db, product) {
+  return db.stock[product.id] !== undefined ? db.stock[product.id] : product.stock;
+}
+function wait(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+// Cumulative minutes from order creation at which each tracking step is reached.
+// Demo pacing: the full journey from order placed to delivered completes within 20 minutes.
+const TRACKING_STEP_MINUTES = [0, 3, 8, 14, 20]; // Order placed, Processing, Shipped, Out for delivery, Delivered
+const RETURN_WINDOW_DAYS = 7; // must match the Return & Refund Policy
+
+// Computes the live step index for an order and persists deliveredAt the first
+// time the order is observed to have reached the final "Delivered" step, so the
+// 7-day return/refund window has a stable start date instead of shifting on every check.
+function computeOrderProgress(order) {
+  const minutesElapsed = (Date.now() - order.createdAt) / 60000;
+  let stepIndex = 0;
+  for (let i = TRACKING_STEP_MINUTES.length - 1; i >= 0; i--) {
+    if (minutesElapsed >= TRACKING_STEP_MINUTES[i]) { stepIndex = i; break; }
+  }
+  const delivered = stepIndex === order.trackingSteps.length - 1;
+  if (delivered && !order.deliveredAt) {
+    order.deliveredAt = Date.now();
+  }
+  order.trackingStepIndex = stepIndex;
+  return stepIndex;
+}
+
+/* ============================ ANALYTICS DASHBOARD ===========================
+   Aggregates a seller's sales in a single O(orders) pass (each order's line
+   items are scanned once — no nested re-scans of the order list), building
+   revenue, units sold, and a per-listing breakdown together as it goes.
+   ========================================================================== */
+function computeSellerAnalytics(db, seller) {
+  let revenue = 0;
+  let unitsSold = 0;
+  const orderIds = new Set();
+  const byListing = new Map(); // name -> { units, revenue }
+
+  for (const order of db.orders) {
+    let touchedThisOrder = false;
+    for (const line of order.items) {
+      if (line.sellerName !== seller.name) continue;
+      touchedThisOrder = true;
+      revenue += line.price * line.qty;
+      unitsSold += line.qty;
+      const entry = byListing.get(line.name) || { units: 0, revenue: 0 };
+      entry.units += line.qty;
+      entry.revenue += line.price * line.qty;
+      byListing.set(line.name, entry);
+    }
+    if (touchedThisOrder) orderIds.add(order.id);
+  }
+
+  const myListings = allListings(db).filter((l) => l.sellerId === seller.id);
+  const lowStock = myListings.filter((l) => l.stock > 0 && l.stock <= 3).length;
+  const outOfStock = myListings.filter((l) => l.stock === 0).length;
+
+  const topListings = [...byListing.entries()]
+    .map(([name, v]) => ({ name, units: v.units, revenue: v.revenue }))
+    .sort((a, b) => b.revenue - a.revenue)
+    .slice(0, 6);
+  const maxRevenue = topListings.length ? topListings[0].revenue : 0;
+
+  return {
+    revenue, unitsSold,
+    ordersCount: orderIds.size,
+    listingsCount: myListings.length,
+    lowStock, outOfStock,
+    topListings, maxRevenue,
+  };
+}
+
+async function api(path, opts = {}) {
+  await wait(280 + Math.random() * 220); // stand-in for network latency
+  const method = (opts.method || 'GET').toUpperCase();
+  const body = opts.body ? JSON.parse(opts.body) : {};
+  const [rawPath, queryStr] = path.split('?');
+  const query = new URLSearchParams(queryStr || '');
+  const db = loadDB();
+  const uid = userIdFromToken(state.token);
+
+  if (rawPath === '/auth/register' && method === 'POST') {
+    const name = (body.name || '').trim();
+    const email = (body.email || '').trim();
+    const password = body.password || '';
+    if (!name || !email || !password) throw apiError('Name, email and password are required.');
+    const credCheck = validateCredentials(email, password, { checkStrength: true });
+    if (!credCheck.valid) throw apiError(credCheck.errors[0]);
+    if (db.users.some((u) => u.email.toLowerCase() === email.toLowerCase())) {
+      throw apiError('An account with that email already exists — try signing in instead.');
+    }
+    const role = body.role === 'seller' ? 'seller' : 'buyer'; // every account is registered as either a buyer or a seller
+    const user = { id: 'u_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name, email, phone: (body.phone || '').trim(), password, role };
+    db.users.push(user);
+    saveDB(db);
+    const publicUserData = publicUser(user);
+    const check = validateResource('User', publicUserData);
+    if (!check.valid) console.warn('[data-exchange-standard] User shape drift:', check.errors);
+    return { token: makeToken(user.id), user: publicUserData };
+  }
+
+  if (rawPath === '/auth/login' && method === 'POST') {
+    const email = (body.email || '').trim();
+    const credCheck = validateCredentials(email, body.password, { checkStrength: false });
+    if (!credCheck.valid) throw apiError(credCheck.errors[0]);
+    const user = db.users.find((u) => u.email.toLowerCase() === email.toLowerCase());
+    if (!user || user.password !== body.password) throw apiError('Incorrect email or password.');
+    if (user.disabled) throw apiError('This account has been disabled by an administrator. Contact support if you believe this is a mistake.', 403);
+    return { token: makeToken(user.id), user: publicUser(user) };
+  }
+
+  if (rawPath === '/auth/me' && method === 'GET') {
+    const user = db.users.find((u) => u.id === uid);
+    if (!user) throw apiError('Session expired, please sign in again.', 401);
+    return publicUser(user);
+  }
+
+  if (rawPath === '/products' && method === 'GET') {
+    const combined = CATALOG.map((p) => ({ ...p, stock: stockFor(db, p) })).concat(allListings(db).filter((p) => !p.removed).map((p) => ({ ...p })));
+    let list = combined;
+    const category = query.get('category');
+    const q = (query.get('q') || '').trim().toLowerCase();
+    if (category && category !== 'All') list = list.filter((p) => p.category === category);
+    if (q) list = list.filter((p) => p.name.toLowerCase().includes(q) || p.description.toLowerCase().includes(q) || p.category.toLowerCase().includes(q));
+    const check = validateResource('Product', list);
+    if (!check.valid) console.warn('[data-exchange-standard] Product shape drift:', check.errors);
+    return { products: list, categories: [...new Set(combined.map((p) => p.category))] };
+  }
+
+  if (rawPath === '/listings/mine' && method === 'GET') {
+    if (!uid) throw apiError('Please sign in.', 401);
+    return allListings(db).filter((l) => l.sellerId === uid).sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  if (rawPath === '/analytics/seller' && method === 'GET') {
+    if (!uid) throw apiError('Please sign in.', 401);
+    const seller = db.users.find((u) => u.id === uid);
+    if (!seller || seller.role !== 'seller') throw apiError('Only seller accounts can view analytics.', 403);
+    return computeSellerAnalytics(db, seller);
+  }
+
+  if (rawPath === '/listings' && method === 'POST') {
+    if (!uid) throw apiError('Please sign in.', 401);
+    const seller = db.users.find((u) => u.id === uid);
+    if (!seller || seller.role !== 'seller') throw apiError('Only seller accounts can list products for sale.', 403);
+    const name = (body.name || '').trim();
+    const category = (body.category || '').trim();
+    const description = (body.description || '').trim();
+    const price = Number(body.price);
+    const stock = Number(body.stock);
+    if (!name || !category || !description) throw apiError('Please fill in the product name, category and description.');
+    if (!Number.isFinite(price) || price <= 0) throw apiError('Please enter a valid price.');
+    if (!Number.isFinite(stock) || stock < 0) throw apiError('Please enter a valid stock quantity.');
+    const listing = {
+      id: 'l_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      sku: 'SELLER-' + Math.random().toString(36).slice(2, 8).toUpperCase(),
+      category, icon: (body.icon || '📦').trim() || '📦', name, price, stock, description,
+      specs: {},
+      sellerId: seller.id,
+      sellerName: seller.name,
+      createdAt: Date.now(),
+      removed: false,
+    };
+    db.listings.push(listing);
+    saveDB(db);
+    return listing;
+  }
+
+  if (rawPath === '/orders' && method === 'GET') {
+    if (!uid) throw apiError('Please sign in.', 401);
+    const mine = db.orders.filter((o) => o.userId === uid);
+    mine.forEach((o) => computeOrderProgress(o));
+    saveDB(db);
+    return mine.sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  if (rawPath === '/orders' && method === 'POST') {
+    if (!uid) throw apiError('Please sign in.', 401);
+    const items = Array.isArray(body.items) ? body.items : [];
+    if (!items.length) throw apiError('Your cart is empty.');
+    const lineItems = [];
+    const productIndex = buildProductIndex(db); // O(n) build, then O(1) per line — see note above buildProductIndex()
+    for (const it of items) {
+      const entry = productIndex.get(it.productId);
+      const product = entry ? entry.product : null;
+      const isListing = entry ? entry.isListing : false;
+      if (!product) continue;
+      const available = isListing ? product.stock : stockFor(db, product);
+      const qty = Math.max(0, Math.min(it.qty, available));
+      if (qty <= 0) continue;
+      if (isListing) { product.stock = available - qty; } else { db.stock[product.id] = available - qty; }
+      lineItems.push({ name: product.name, price: product.price, qty, sellerName: product.sellerName || null });
+    }
+    if (!lineItems.length) throw apiError('Those items just sold out — please review your cart.');
+    const subtotal = lineItems.reduce((s, l) => s + l.price * l.qty, 0);
+    const shipping = subtotal >= 200000 ? 0 : 3500;
+    const paymentMethod = body.paymentMethod || 'card';
+    const needsRRR = paymentMethod === 'card' || paymentMethod === 'transfer';
+    const order = {
+      id: 'o_' + Date.now().toString(36),
+      userId: uid,
+      trackingId: 'EMP-' + Math.random().toString(36).slice(2, 8).toUpperCase(),
+      items: lineItems,
+      total: subtotal + shipping,
+      paymentMethod,
+      rrr: needsRRR ? String(Math.floor(1e11 + Math.random() * 8.9e11)) : null,
+      paid: !needsRRR,
+      address: body.address || '',
+      phone: body.phone || '',
+      status: needsRRR ? 'Pending' : 'Processing',
+      createdAt: Date.now(),
+      trackingSteps: ['Order placed', 'Processing', 'Shipped', 'Out for delivery', 'Delivered'],
+      trackingStepIndex: 0,
+      deliveredAt: null,
+      feedback: null,      // { satisfied, comment, submittedAt }
+      returnRequest: null, // { type, reason, notes, requestedAt, status }
+    };
+    db.orders.push(order);
+    saveDB(db);
+    return order;
+  }
+
+  if (rawPath === '/orders/confirm-payment' && method === 'POST') {
+    if (!uid) throw apiError('Please sign in.', 401);
+    const order = db.orders.find((o) => o.trackingId === body.trackingId && o.userId === uid);
+    if (!order) throw apiError('Order not found.', 404);
+    if (order.paid) return order;
+    if (!order.rrr || String(body.rrr || '').trim() !== order.rrr) {
+      throw apiError('That RRR number does not match this order. Please check and try again.');
+    }
+    order.paid = true;
+    order.status = 'Processing';
+    saveDB(db);
+    return order;
+  }
+
+  if (rawPath.startsWith('/orders/track/') && method === 'GET') {
+    const trackingId = decodeURIComponent(rawPath.slice('/orders/track/'.length));
+    const order = db.orders.find((o) => o.trackingId === trackingId);
+    if (!order) throw apiError('No order found with that tracking ID.', 404);
+    const stepIndex = computeOrderProgress(order);
+    saveDB(db);
+    return {
+      trackingId: order.trackingId,
+      itemCount: order.items.reduce((s, l) => s + l.qty, 0),
+      trackingSteps: order.trackingSteps,
+      trackingStepIndex: stepIndex,
+      deliveredAt: order.deliveredAt,
+      feedback: order.feedback,
+      returnRequest: order.returnRequest,
+    };
+  }
+
+  if (rawPath === '/orders/feedback' && method === 'POST') {
+    if (!uid) throw apiError('Please sign in.', 401);
+    const order = db.orders.find((o) => o.trackingId === body.trackingId && o.userId === uid);
+    if (!order) throw apiError('Order not found.', 404);
+    computeOrderProgress(order);
+    if (!order.deliveredAt) throw apiError('This order has not been delivered yet.');
+    const satisfied = !!body.satisfied;
+    order.feedback = { satisfied, comment: (body.comment || '').trim(), submittedAt: Date.now() };
+    order.status = satisfied ? 'Delivered — feedback received' : 'Delivered — return requested';
+    saveDB(db);
+    return order;
+  }
+
+  if (rawPath === '/orders/return-request' && method === 'POST') {
+    if (!uid) throw apiError('Please sign in.', 401);
+    const order = db.orders.find((o) => o.trackingId === body.trackingId && o.userId === uid);
+    if (!order) throw apiError('Order not found.', 404);
+    computeOrderProgress(order);
+    if (!order.deliveredAt) throw apiError('This order has not been delivered yet.');
+    const daysSinceDelivery = (Date.now() - order.deliveredAt) / 86400000;
+    if (daysSinceDelivery > RETURN_WINDOW_DAYS) {
+      throw apiError(`Sorry, the ${RETURN_WINDOW_DAYS}-day return & refund window for this order has passed.`);
+    }
+    if (!body.agree) {
+      throw apiError('Please confirm the item meets the return conditions in our Return & Refund Policy.');
+    }
+    const type = body.type === 'damaged_faulty' ? 'damaged_faulty' : 'change_of_mind';
+    order.returnRequest = {
+      type,
+      reason: (body.reason || '').trim(),
+      notes: (body.notes || '').trim(),
+      requestedAt: Date.now(),
+      status: 'Requested',
+    };
+    order.status = 'Return requested';
+    saveDB(db);
+    return order;
+  }
+
+  /* ------------------------------ admin ----------------------------------- */
+
+  function requireAdmin() {
+    if (!uid) throw apiError('Please sign in.', 401);
+    const admin = db.users.find((u) => u.id === uid);
+    if (!admin || admin.role !== 'admin') throw apiError('Admin access required.', 403);
+    return admin;
+  }
+
+  if (rawPath === '/admin/reports/sales' && method === 'GET') {
+    requireAdmin();
+    // Priority-queue-style "top N": we only need the top 6 products by revenue,
+    // so a full sort of every product would be wasteful once the catalogue is
+    // large — here it's small enough to sort directly, but the same slice(0,6)
+    // pattern below is what a heap-backed top-N would return.
+    const byProduct = new Map(); // name -> { units, revenue }
+    let totalRevenue = 0, totalUnits = 0;
+    for (const order of db.orders) {
+      for (const line of order.items) {
+        totalRevenue += line.price * line.qty;
+        totalUnits += line.qty;
+        const entry = byProduct.get(line.name) || { units: 0, revenue: 0 };
+        entry.units += line.qty; entry.revenue += line.price * line.qty;
+        byProduct.set(line.name, entry);
+      }
+    }
+    const topProducts = [...byProduct.entries()]
+      .map(([name, v]) => ({ name, ...v }))
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 6);
+    return {
+      totalRevenue, totalUnits,
+      ordersCount: db.orders.length,
+      usersCount: db.users.length,
+      buyersCount: db.users.filter((u) => u.role === 'buyer').length,
+      sellersCount: db.users.filter((u) => u.role === 'seller').length,
+      listingsCount: allListings(db).length,
+      flaggedCount: allListings(db).filter((l) => l.removed).length,
+      topProducts,
+    };
+  }
+
+  if (rawPath === '/admin/moderation/listings' && method === 'GET') {
+    requireAdmin();
+    return allListings(db).slice().sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  if (rawPath.startsWith('/admin/moderation/listings/') && method === 'PATCH') {
+    requireAdmin();
+    const id = decodeURIComponent(rawPath.slice('/admin/moderation/listings/'.length));
+    const listing = allListings(db).find((l) => l.id === id);
+    if (!listing) throw apiError('Listing not found.', 404);
+    listing.removed = !listing.removed;
+    saveDB(db);
+    return listing;
+  }
+
+  if (rawPath === '/admin/moderation/users' && method === 'GET') {
+    requireAdmin();
+    return db.users.filter((u) => u.role !== 'admin').map(publicUserWithStatus);
+  }
+
+  if (rawPath.startsWith('/admin/moderation/users/') && method === 'PATCH') {
+    requireAdmin();
+    const id = decodeURIComponent(rawPath.slice('/admin/moderation/users/'.length));
+    const user = db.users.find((u) => u.id === id);
+    if (!user) throw apiError('User not found.', 404);
+    if (user.role === 'admin') throw apiError('Cannot disable an admin account.', 400);
+    user.disabled = !user.disabled;
+    saveDB(db);
+    return publicUserWithStatus(user);
+  }
+
+  throw apiError(`Unknown request: ${method} ${rawPath}`, 404);
+}
+function publicUserWithStatus(u) { return { id: u.id, name: u.name, email: u.email, role: u.role, disabled: !!u.disabled }; }
+
+/* ---------------------------- data loading ---------------------------- */
+
+async function loadProducts() {
+  state.productsLoading = true;
+  render();
+  try {
+    const params = new URLSearchParams();
+    if (state.category && state.category !== 'All') params.set('category', state.category);
+    if (state.search) params.set('q', state.search);
+    const data = await api(`/products?${params.toString()}`);
+    state.products = data.products;
+    state.categories = data.categories;
+  } catch (err) {
+    console.error(err);
+  } finally {
+    state.productsLoading = false;
+    render();
+  }
+}
+
+async function loadAllProducts() {
+  try {
+    const data = await api('/products');
+    state.allProducts = data.products;
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+async function loadOrders() {
+  state.ordersLoading = true;
+  render();
+  try {
+    state.orders = await api('/orders');
+  } catch (err) {
+    console.error(err);
+  } finally {
+    state.ordersLoading = false;
+    render();
+  }
+}
+
+async function loadMyListings() {
+  state.myListingsLoading = true;
+  render();
+  try {
+    state.myListings = await api('/listings/mine');
+  } catch (err) {
+    console.error(err);
+  } finally {
+    state.myListingsLoading = false;
+    render();
+  }
+}
+
+async function loadAnalytics() {
+  state.analyticsLoading = true;
+  render();
+  try {
+    state.analytics = await api('/analytics/seller');
+  } catch (err) {
+    console.error(err);
+  } finally {
+    state.analyticsLoading = false;
+    render();
+  }
+}
+
+async function loadAdmin() {
+  state.adminLoading = true; render();
+  try {
+    const [report, listings, users] = await Promise.all([
+      api('/admin/reports/sales'),
+      api('/admin/moderation/listings'),
+      api('/admin/moderation/users'),
+    ]);
+    state.adminReport = report;
+    state.adminListings = listings;
+    state.adminUsers = users;
+  } catch (err) {
+    console.error(err);
+  } finally {
+    state.adminLoading = false; render();
+  }
+}
+
+async function toggleListingRemoved(id) {
+  try {
+    await api(`/admin/moderation/listings/${encodeURIComponent(id)}`, { method: 'PATCH' });
+    await loadAdmin();
+    await loadProducts();
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+async function toggleUserDisabled(id) {
+  try {
+    await api(`/admin/moderation/users/${encodeURIComponent(id)}`, { method: 'PATCH' });
+    await loadAdmin();
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+/* ------------------------------ support chat ------------------------------ */
+// Client-side only (no backend endpoint) — simulates the "Chat / Support"
+// screen from the IA with canned, keyword-matched replies.
+const CHAT_QUICK_REPLIES = ['Where is my order?', 'How do returns work?', 'Payment methods?', 'Talk to a human'];
+function chatBotReply(userText) {
+  const t = userText.toLowerCase();
+  if (t.includes('order') || t.includes('track') || t.includes('where')) {
+    return 'You can check live status any time on the "Track package" tab using your EMP-XXXXXX tracking ID from My Orders.';
+  }
+  if (t.includes('return') || t.includes('refund')) {
+    return 'Returns open from a delivered order under My Orders → Return/Refund, within the return window in our Return & Refund Policy (footer link).';
+  }
+  if (t.includes('payment') || t.includes('pay') || t.includes('card') || t.includes('transfer')) {
+    return 'We accept card, bank transfer, and pay-on-delivery — pick one at checkout. Card/transfer orders get an RRR reference to confirm.';
+  }
+  if (t.includes('human') || t.includes('agent') || t.includes('person')) {
+    return 'For a real person, message us on WhatsApp — the number is in the footer under "Customer care".';
+  }
+  return "Thanks — I've noted that. For anything this demo bot can't resolve, reach our WhatsApp customer care line in the footer.";
+}
+function sendChatMessage(text) {
+  const clean = (text || '').trim();
+  if (!clean) return;
+  state.chatMessages.push({ from: 'user', text: clean });
+  state.chatDraft = '';
+  render();
+  setTimeout(() => {
+    state.chatMessages.push({ from: 'bot', text: chatBotReply(clean) });
+    if (!state.chatOpen) state.chatUnread += 1;
+    render();
+  }, 500);
+}
+
+async function submitListing(payload) {
+  state.listingBusy = true; state.listingError = ''; state.listingOk = ''; render();
+  try {
+    await api('/listings', { method: 'POST', body: JSON.stringify(payload) });
+    state.listingOk = 'Listing published — it now appears in the marketplace for buyers to purchase.';
+    await loadMyListings();
+    await loadProducts();
+    await loadAllProducts();
+  } catch (err) {
+    state.listingError = err.message;
+  } finally {
+    state.listingBusy = false; render();
+  }
+}
+
+/* ------------------------------ auth ----------------------------------- */
+
+async function doLogin(email, password) {
+  state.authBusy = true; state.authError = ''; render();
+  try {
+    const data = await api('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+    const guestCart = state.cart;
+    saveSession(data.token, data.user);
+    mergeGuestCart(guestCart);
+    state.authOpen = false;
+    state.checkoutOpen = true; state.checkoutError = '';
+    state.view = 'shop';
+    await loadProducts();
+  } catch (err) {
+    state.authError = err.message;
+  } finally {
+    state.authBusy = false; render();
+  }
+}
+
+async function doRegister(payload) {
+  state.authBusy = true; state.authError = ''; render();
+  try {
+    const data = await api('/auth/register', { method: 'POST', body: JSON.stringify(payload) });
+    const guestCart = state.cart;
+    saveSession(data.token, data.user);
+    mergeGuestCart(guestCart);
+    state.authOpen = false;
+    state.checkoutOpen = true; state.checkoutError = '';
+    state.view = 'shop';
+    await loadProducts();
+  } catch (err) {
+    state.authError = err.message;
+  } finally {
+    state.authBusy = false; render();
+  }
+}
+
+function mergeGuestCart(guestLines) {
+  (guestLines || []).forEach((g) => {
+    const ex = state.cart.find((l) => l.productId === g.productId);
+    if (ex) { ex.stock = g.stock; ex.qty = Math.min(ex.qty + g.qty, g.stock); }
+    else state.cart.push({ ...g });
+  });
+  persistCart();
+  localStorage.removeItem('emp_cart_guest');
+}
+
+function doLogout() {
+  clearSession();
+  state.orders = [];
+  state.view = 'shop';
+  render();
+}
+
+/* ------------------------------ cart ------------------------------------ */
+
+function addToCart(product) {
+  const line = state.cart.find((l) => l.productId === product.id);
+  if (line) {
+    if (line.qty < product.stock) line.qty += 1;
+  } else {
+    state.cart.push({ productId: product.id, name: product.name, price: product.price, qty: 1, stock: product.stock });
+  }
+  persistCart();
+  render();
+}
+
+function changeQty(productId, delta) {
+  const line = state.cart.find((l) => l.productId === productId);
+  if (!line) return;
+  line.qty += delta;
+  if (line.qty <= 0) {
+    state.cart = state.cart.filter((l) => l.productId !== productId);
+  } else if (line.qty > line.stock) {
+    line.qty = line.stock;
+  }
+  persistCart();
+  render();
+}
+
+function removeFromCart(productId) {
+  state.cart = state.cart.filter((l) => l.productId !== productId);
+  persistCart();
+  render();
+}
+
+function cartSubtotal() {
+  return state.cart.reduce((sum, l) => sum + l.price * l.qty, 0);
+}
+function cartCount() {
+  return state.cart.reduce((n, l) => n + l.qty, 0);
+}
+
+/* ----------------------------- checkout ---------------------------------- */
+
+async function placeOrder() {
+  if (!state.address.trim()) {
+    state.checkoutError = 'Please enter a delivery address.';
+    render();
+    return;
+  }
+  if (!state.phone.trim()) {
+    state.checkoutError = 'Please enter a phone number for the delivery.';
+    render();
+    return;
+  }
+  if (state.paymentMethod === 'card') {
+    const digits = state.cardNumber.replace(/\s+/g, '');
+    if (!state.cardName.trim()) {
+      state.checkoutError = 'Please enter the name on the card.';
+      render();
+      return;
+    }
+    if (!/^\d{13,19}$/.test(digits)) {
+      state.checkoutError = 'Please enter a valid card number.';
+      render();
+      return;
+    }
+    if (!/^(0[1-9]|1[0-2])\/\d{2}$/.test(state.cardExpiry.trim())) {
+      state.checkoutError = 'Please enter the card expiry as MM/YY.';
+      render();
+      return;
+    }
+    if (!/^\d{3,4}$/.test(state.cardCvv.trim())) {
+      state.checkoutError = 'Please enter a valid CVV.';
+      render();
+      return;
+    }
+  }
+  state.checkoutBusy = true; state.checkoutError = ''; render();
+  try {
+    const order = await api('/orders', {
+      method: 'POST',
+      body: JSON.stringify({
+        items: state.cart.map((l) => ({ productId: l.productId, qty: l.qty })),
+        paymentMethod: state.paymentMethod,
+        address: state.address,
+        phone: state.phone,
+      }),
+    });
+    state.lastOrder = order;
+    state.cart = [];
+    persistCart();
+    state.checkoutOpen = false;
+    state.cartOpen = false;
+    state.address = '';
+    state.phone = '';
+    state.cardName = '';
+    state.cardNumber = '';
+    state.cardExpiry = '';
+    state.cardCvv = '';
+    state.view = 'orders';
+    await loadProducts(); // stock changed
+    await loadAllProducts();
+  } catch (err) {
+    state.checkoutError = err.message;
+  } finally {
+    state.checkoutBusy = false; render();
+  }
+}
+
+/* ------------------------------ tracking --------------------------------- */
+
+async function trackPackage(trackingId) {
+  state.trackError = ''; state.trackResult = null; render();
+  try {
+    state.trackResult = await api(`/orders/track/${encodeURIComponent(trackingId.trim().toUpperCase())}`);
+  } catch (err) {
+    state.trackError = err.message;
+  } finally {
+    render();
+  }
+}
+
+async function confirmPayment(trackingId) {
+  const rrr = (state.rrrDrafts[trackingId] || '').trim();
+  if (!rrr) {
+    state.rrrErrors[trackingId] = 'Enter the RRR number to confirm your payment.';
+    render();
+    return;
+  }
+  try {
+    const updated = await api('/orders/confirm-payment', {
+      method: 'POST',
+      body: JSON.stringify({ trackingId, rrr }),
+    });
+    state.orders = state.orders.map((o) => (o.trackingId === trackingId ? updated : o));
+    if (state.lastOrder && state.lastOrder.trackingId === trackingId) state.lastOrder = updated;
+    delete state.rrrDrafts[trackingId];
+    delete state.rrrErrors[trackingId];
+  } catch (err) {
+    state.rrrErrors[trackingId] = err.message;
+  }
+  render();
+}
+
+/* --------------------------- delivery feedback ---------------------------- */
+
+function applyUpdatedOrder(updated) {
+  state.orders = state.orders.map((o) => (o.trackingId === updated.trackingId ? updated : o));
+  if (state.lastOrder && state.lastOrder.trackingId === updated.trackingId) state.lastOrder = updated;
+  if (state.trackResult && state.trackResult.trackingId === updated.trackingId) {
+    state.trackResult = { ...state.trackResult, feedback: updated.feedback, returnRequest: updated.returnRequest, trackingStepIndex: updated.trackingStepIndex, deliveredAt: updated.deliveredAt };
+  }
+}
+
+async function submitFeedback(trackingId, satisfied) {
+  state.feedbackBusy[trackingId] = true; render();
+  try {
+    const updated = await api('/orders/feedback', { method: 'POST', body: JSON.stringify({ trackingId, satisfied }) });
+    applyUpdatedOrder(updated);
+    if (!satisfied) {
+      state.returnForms[trackingId] = { type: 'change_of_mind', reason: '', notes: '', agree: false };
+    }
+  } catch (err) {
+    state.returnErrors[trackingId] = err.message;
+  } finally {
+    state.feedbackBusy[trackingId] = false; render();
+  }
+}
+
+function updateReturnForm(trackingId, field, value) {
+  const form = state.returnForms[trackingId] || { type: 'change_of_mind', reason: '', notes: '', agree: false };
+  form[field] = value;
+  state.returnForms[trackingId] = form;
+}
+
+async function submitReturnRequest(trackingId) {
+  const form = state.returnForms[trackingId] || {};
+  if (!form.reason || !form.reason.trim()) {
+    state.returnErrors[trackingId] = 'Please tell us briefly what went wrong.';
+    render();
+    return;
+  }
+  if (!form.agree) {
+    state.returnErrors[trackingId] = 'Please confirm the item meets our Return & Refund Policy conditions.';
+    render();
+    return;
+  }
+  state.returnBusy[trackingId] = true; render();
+  try {
+    const updated = await api('/orders/return-request', {
+      method: 'POST',
+      body: JSON.stringify({ trackingId, type: form.type, reason: form.reason, notes: form.notes, agree: form.agree }),
+    });
+    applyUpdatedOrder(updated);
+    delete state.returnForms[trackingId];
+    delete state.returnErrors[trackingId];
+  } catch (err) {
+    state.returnErrors[trackingId] = err.message;
+  } finally {
+    state.returnBusy[trackingId] = false; render();
+  }
+}
+
+/* ================================ RENDER ================================= */
+
+function towerSVG(cls) {
+  return `<svg class="tower-silhouette ${cls}" viewBox="0 0 200 320" aria-hidden="true"><use href="#eiffel-shape"></use></svg>`;
+}
+
+function userRole() { return state.user ? state.user.role : 'guest'; }
+
+function render() {
+  root.innerHTML = renderShell();
+  bindEvents();
+}
+
+function renderAuth() {
+  if (!state.authOpen) return '';
+  const isLogin = state.authMode === 'login';
+  return `
+  <div class="modal-overlay open" data-action="close-auth">
+    <div class="auth-card" role="dialog" aria-modal="true" aria-label="Sign in to continue to checkout" onclick="event.stopPropagation()" style="max-height:92vh; overflow-y:auto;">
+      <button class="modal-close" data-action="close-auth" aria-label="Close sign in">✕</button>
+      <div class="auth-brand">
+        <div class="tower-mark"><i class="t1"></i><i class="t2"></i><i class="t3"></i><i class="t4"></i><i class="t5"></i><i class="t6"></i></div>
+        <span>ElectroMart</span>
+      </div>
+      <div class="auth-tag">ÉLECTRONIQUE&nbsp;·&nbsp;CURATED TECH, DELIVERED ACROSS NIGERIA</div>
+      <div class="flash ok">Please sign in or create an account to continue to checkout. Your cart is saved.</div>
+      ${state.authError ? `<div class="flash">${escapeHtml(state.authError)}</div>` : ''}
+      ${isLogin ? `
+        <form id="loginForm">
+          <div class="field"><label>Email</label><input type="email" name="email" required placeholder="you@example.com"></div>
+          <div class="field"><label>Password</label><input type="password" name="password" required placeholder="••••••••"></div>
+          <button class="btn btn-gold btn-block" type="submit" ${state.authBusy ? 'disabled' : ''}>${state.authBusy ? 'Signing in…' : 'Sign in'}</button>
+        </form>
+        <div class="auth-switch">New here? <button type="button" data-action="switch-auth" data-mode="register">Create an account</button></div>
+        <div class="auth-hint">Demo tip: register a fresh account for buyer/seller access — there's no seeded buyer/seller login. To view the Admin dashboard, sign in with <strong>admin@electromart.demo</strong> / <strong>Admin#2026</strong>. Everything (accounts, orders, stock) is stored locally in this browser and persists across reloads, but won't follow you to another device or browser.</div>
+      ` : `
+        <form id="registerForm">
+          <div class="field"><label>Full name</label><input type="text" name="name" required placeholder="Ada Lovelace"></div>
+          <div class="field"><label>Email</label><input type="email" name="email" required placeholder="you@example.com"></div>
+          <div class="field"><label>Phone (optional)</label><input type="tel" name="phone" placeholder="080..."></div>
+          <div class="field"><label>Password</label><input type="password" name="password" required minlength="6" placeholder="At least 6 characters"></div>
+          <div class="field">
+            <label>Account type</label>
+            <select name="role" required>
+              <option value="buyer">Buyer — I want to buy products</option>
+              <option value="seller">Seller — I want to sell products</option>
+            </select>
+          </div>
+          <button class="btn btn-gold btn-block" type="submit" ${state.authBusy ? 'disabled' : ''}>${state.authBusy ? 'Creating account…' : 'Create account'}</button>
+        </form>
+        <div class="auth-switch">Already have an account? <button type="button" data-action="switch-auth" data-mode="login">Sign in</button></div>
+      `}
+    </div>
+  </div>`;
+}
+
+function renderShell() {
+  return `
+  <header class="topbar">
+    <div class="brand">
+      <div class="tower-mark"><i class="t1"></i><i class="t2"></i><i class="t3"></i><i class="t4"></i><i class="t5"></i><i class="t6"></i></div>
+      ElectroMart
+    </div>
+    <nav class="tabs">
+      <button data-action="nav" data-view="shop" class="${state.view === 'shop' ? 'active' : ''}">Electronics</button>
+      ${state.user ? `<button data-action="nav" data-view="orders" class="${state.view === 'orders' ? 'active' : ''}">My orders</button>` : ''}
+      <button data-action="nav" data-view="track" class="${state.view === 'track' ? 'active' : ''}">Track package</button>
+      ${userRole() === 'seller' ? `<button data-action="nav" data-view="sell" class="${state.view === 'sell' ? 'active' : ''}">Sell</button>` : ''}
+      ${userRole() === 'seller' ? `<button data-action="nav" data-view="analytics" class="${state.view === 'analytics' ? 'active' : ''}">Analytics</button>` : ''}
+      ${userRole() === 'admin' ? `<button data-action="nav" data-view="admin" class="${state.view === 'admin' ? 'active' : ''}">Admin</button>` : ''}
+    </nav>
+    <div class="topbar-search">
+      🔍 <input id="searchInput" type="text" placeholder="Search products…" value="${escapeAttr(state.search)}">
+    </div>
+    <div class="topbar-actions">
+      ${state.user ? `<span class="user-chip">Hello, ${escapeHtml(state.user.name)} · ${state.user.role === 'seller' ? 'Seller account' : 'Buyer account'}</span>` : ''}
+      <button class="icon-btn" data-action="open-cart">🛒 Cart ${state.cart.length ? `<span class="badge">${cartCount()}</span>` : ''}</button>
+      ${state.user ? `<button class="icon-btn" data-action="logout">Sign out</button>` : ''}
+    </div>
+  </header>
+  <main>
+    ${state.view === 'shop' ? renderShop() : ''}
+    ${state.view === 'orders' ? renderOrders() : ''}
+    ${state.view === 'track' ? renderTrack() : ''}
+    ${state.view === 'sell' && userRole() === 'seller' ? renderSell() : ''}
+    ${state.view === 'analytics' && userRole() === 'seller' ? renderAnalytics() : ''}
+    ${state.view === 'admin' && userRole() === 'admin' ? renderAdmin() : ''}
+  </main>
+  <footer>
+    <div class="footer-care">Customer care number for WhatsApp only: <a href="https://wa.me/2347043941075" target="_blank" rel="noopener">07043941075</a></div>
+    <div class="footer-links">
+      <button type="button" data-action="open-info" data-key="terms">Terms and Conditions</button>
+      <span class="sep">•</span>
+      <button type="button" data-action="open-info" data-key="privacy">Privacy Policy</button>
+      <span class="sep">•</span>
+      <button type="button" data-action="open-info" data-key="returns">Return and Refund Policy</button>
+      <span class="sep">•</span>
+      <button type="button" data-action="open-info" data-key="requirements">Requirements</button>
+      <span class="sep">•</span>
+      <button type="button" data-action="open-info" data-key="standards">Standards &amp; Certification</button>
+    </div>
+    ElectroMart — a demo marketplace built for a software engineering coursework exercise. Not a real store. Prices shown for Konga, Jumia, AliExpress, Slot, and Jiji are illustrative estimates for comparison purposes only, not live data pulled from those retailers.
+  </footer>
+  ${renderCartDrawer()}
+  ${renderProductModal()}
+  ${renderCheckoutModal()}
+  ${renderAuth()}
+  ${renderInfoModal()}
+  ${renderChatWidget()}
+  `;
+}
+
+function renderChatWidget() {
+  return `
+  <div class="chat-widget">
+    ${state.chatOpen ? `
+    <div class="chat-panel">
+      <div class="chat-panel-head">
+        <span>Support Chat <span class="chat-demo-tag">demo</span></span>
+        <button type="button" class="chat-close" data-action="toggle-chat" aria-label="Close chat">✕</button>
+      </div>
+      <div class="chat-thread">
+        ${state.chatMessages.map((m) => `<div class="chat-msg chat-${m.from}">${escapeHtml(m.text)}</div>`).join('')}
+      </div>
+      <div class="chat-quick">
+        ${CHAT_QUICK_REPLIES.map((q) => `<button type="button" class="chat-quick-btn" data-action="quick-reply" data-text="${escapeAttr(q)}">${escapeHtml(q)}</button>`).join('')}
+      </div>
+      <form id="chatForm" class="chat-input-row">
+        <input type="text" id="chatInput" placeholder="Type a message…" value="${escapeAttr(state.chatDraft)}" autocomplete="off">
+        <button class="btn btn-gold" type="submit">Send</button>
+      </form>
+    </div>` : ''}
+    <button type="button" class="chat-fab" data-action="toggle-chat" aria-label="Open support chat">
+      💬${state.chatUnread && !state.chatOpen ? `<span class="badge chat-fab-badge">${state.chatUnread}</span>` : ''}
+    </button>
+  </div>`;
+}
+
+function renderShop() {
+  return `
+    <div class="hero">
+      ${towerSVG('')}
+      <div class="hero-copy">
+        <div class="eyebrow">Nouvelle Collection</div>
+        <h1>Electronics, elevated.</h1>
+        <p>Curated phones, laptops, audio and smart-home gear — sourced carefully, delivered fast, tracked every step of the way.</p>
+      </div>
+    </div>
+    <div class="section-head"><h2>Electronics</h2></div>
+    <div class="catalog-layout">
+      <aside class="filters">
+        <h4>Categories</h4>
+        <div class="cat-list">
+          <button data-action="set-category" data-cat="All" class="${state.category === 'All' ? 'active' : ''}">All products</button>
+          ${state.categories.map((c) => `<button data-action="set-category" data-cat="${escapeAttr(c)}" class="${state.category === c ? 'active' : ''}">${escapeHtml(c)}</button>`).join('')}
+        </div>
+      </aside>
+      <div>
+        <div class="result-count">${state.productsLoading ? 'Loading…' : `${state.products.length} item${state.products.length === 1 ? '' : 's'} found`}</div>
+        ${state.productsLoading ? '' : (state.products.length ? renderGrid() : '<div class="empty-state">No products match your search. Try a different category or keyword.</div>')}
+      </div>
+    </div>
+  `;
+}
+
+function renderGrid() {
+  return `<div class="grid">
+    ${state.products.map((p) => `
+      <div class="card" data-action="open-product" data-id="${p.id}">
+        <div class="sku-tag">${escapeHtml(p.sku)}</div>
+        <div class="card-icon">${p.icon}</div>
+        <div class="card-cat">${escapeHtml(p.category)}${p.sellerName ? ` · Sold by ${escapeHtml(p.sellerName)}` : ''}</div>
+        <div class="card-title">${escapeHtml(p.name)}</div>
+        ${p.stock <= 5 ? `<div class="low-stock">Only ${p.stock} left</div>` : ''}
+        <div class="compare-row"><span class="compare-label">${escapeHtml(cheapestCompetitor(p).name)}</span> <span class="compare-strike">${fmt(cheapestCompetitor(p).price)}</span></div>
+        <div class="cert-badge" title="Certified to SON/SONCAP and sourced with reference to ISO 9001"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 4 6v6c0 5 3.4 8.4 8 10 4.6-1.6 8-5 8-10V6l-8-4Z"/><path d="m9 12 2 2 4-4"/></svg>SON · ISO 9001</div>
+        <div class="card-foot">
+          <span class="card-price">${fmt(p.price)}</span>
+          <button class="add-btn" data-action="add-to-cart" data-id="${p.id}" aria-label="Add ${escapeAttr(p.name)} to cart" ${p.stock === 0 ? 'disabled' : ''}>${p.stock === 0 ? 'Out of stock' : 'Add'}</button>
+        </div>
+      </div>
+    `).join('')}
+  </div>`;
+}
+
+// Original line-art icons (not sourced from any external image) — one per
+// product category, used as an in-app visual reference for sellers.
+const CATEGORY_ICONS = {
+  'Laptops': `<svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="10" y="10" width="28" height="18" rx="2" stroke="var(--ink)" stroke-width="2"/><path d="M6 32h36l-3 6H9l-3-6Z" stroke="var(--gold)" stroke-width="2" stroke-linejoin="round"/></svg>`,
+  'Smartphones': `<svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="15" y="6" width="18" height="36" rx="3" stroke="var(--ink)" stroke-width="2"/><circle cx="24" cy="35" r="1.6" fill="var(--gold)"/></svg>`,
+  'Audio': `<svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M10 26v-4a14 14 0 0 1 28 0v4" stroke="var(--ink)" stroke-width="2"/><rect x="6" y="26" width="9" height="12" rx="3" stroke="var(--gold)" stroke-width="2"/><rect x="33" y="26" width="9" height="12" rx="3" stroke="var(--gold)" stroke-width="2"/></svg>`,
+  'Cameras': `<svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="6" y="16" width="36" height="24" rx="3" stroke="var(--ink)" stroke-width="2"/><path d="M17 16l3-6h8l3 6" stroke="var(--ink)" stroke-width="2"/><circle cx="24" cy="28" r="7" stroke="var(--gold)" stroke-width="2"/></svg>`,
+  'Drones': `<svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="19" y="19" width="10" height="10" rx="2" stroke="var(--ink)" stroke-width="2"/><path d="M19 19L8 8M29 19l11-11M19 29L8 40M29 29l11 11" stroke="var(--ink)" stroke-width="2"/><circle cx="8" cy="8" r="4" stroke="var(--gold)" stroke-width="2"/><circle cx="40" cy="8" r="4" stroke="var(--gold)" stroke-width="2"/><circle cx="8" cy="40" r="4" stroke="var(--gold)" stroke-width="2"/><circle cx="40" cy="40" r="4" stroke="var(--gold)" stroke-width="2"/></svg>`,
+  'Gaming': `<svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 18h24a8 8 0 0 1 8 10l-1 6a4 4 0 0 1-7 2l-4-5H16l-4 5a4 4 0 0 1-7-2l-1-6a8 8 0 0 1 8-10Z" stroke="var(--ink)" stroke-width="2" stroke-linejoin="round"/><path d="M16 24v6M13 27h6" stroke="var(--gold)" stroke-width="2"/><circle cx="33" cy="24" r="1.6" fill="var(--gold)"/><circle cx="37" cy="28" r="1.6" fill="var(--gold)"/></svg>`,
+  'Networking': `<svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 20a17 17 0 0 1 24 0M17 25a10 10 0 0 1 14 0" stroke="var(--ink)" stroke-width="2"/><circle cx="24" cy="34" r="3" fill="var(--gold)"/></svg>`,
+  'Printers': `<svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="8" y="18" width="32" height="14" rx="2" stroke="var(--ink)" stroke-width="2"/><path d="M14 18v-8h20v8M14 32v8h20v-8" stroke="var(--gold)" stroke-width="2"/></svg>`,
+  'Smart Home': `<svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 22 24 8l16 14" stroke="var(--ink)" stroke-width="2" stroke-linejoin="round"/><path d="M13 20v18h22V20" stroke="var(--ink)" stroke-width="2"/><circle cx="24" cy="30" r="3" stroke="var(--gold)" stroke-width="2"/></svg>`,
+  'TV & Home': `<svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="6" y="10" width="36" height="22" rx="2" stroke="var(--ink)" stroke-width="2"/><path d="M18 38h12" stroke="var(--gold)" stroke-width="2"/></svg>`,
+  'Tablets': `<svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="9" y="7" width="30" height="34" rx="3" stroke="var(--ink)" stroke-width="2"/><circle cx="24" cy="35" r="1.6" fill="var(--gold)"/></svg>`,
+  'Wearables': `<svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="15" y="15" width="18" height="18" rx="4" stroke="var(--ink)" stroke-width="2"/><path d="M19 15V9h10v6M19 33v6h10v-6" stroke="var(--gold)" stroke-width="2"/></svg>`,
+  'Accessories': `<svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M20 12l16 16-8 8-16-16 2-6 6-2Z" stroke="var(--ink)" stroke-width="2" stroke-linejoin="round"/><path d="M12 30l-4 4a3 3 0 0 0 4 4l4-4" stroke="var(--gold)" stroke-width="2"/></svg>`,
+};
+
+function renderCategoryReference() {
+  return `<div class="cat-ref-grid">
+    ${Object.keys(CATEGORY_ICONS).map((cat) => `
+      <div class="cat-ref-card" data-action="pick-category" data-cat="${escapeAttr(cat)}">
+        ${CATEGORY_ICONS[cat]}
+        <span>${escapeHtml(cat)}</span>
+      </div>
+    `).join('')}
+  </div>`;
+}
+
+function renderProductPictureReference() {
+  const byCategory = {};
+  CATALOG.forEach((p) => {
+    if (!byCategory[p.category]) byCategory[p.category] = [];
+    byCategory[p.category].push(p);
+  });
+  const orderedCats = Object.keys(CATEGORY_ICONS).filter((c) => byCategory[c]);
+  return `
+    <div class="summary-card" style="margin-bottom:26px;">
+      <h4 style="font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:1px; color:var(--ink-dim); margin:0 0 16px;">Picture reference — every product, by category</h4>
+      ${orderedCats.map((cat) => `
+        <div class="product-ref-section">
+          <div class="product-ref-head">${CATEGORY_ICONS[cat]}<h5>${escapeHtml(cat)}</h5></div>
+          <div class="product-ref-grid">
+            ${byCategory[cat].map((p) => `<span class="product-ref-chip"><span class="chip-icon">${p.icon}</span>${escapeHtml(p.name)}</span>`).join('')}
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderSell() {
+  return `
+    <div class="section-head"><h2>Sell on ElectroMart</h2></div>
+    ${renderCategoryReference()}
+    ${renderProductPictureReference()}
+    <div class="checkout-grid">
+      <div class="summary-card">
+        <h4 style="font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:1px; color:var(--ink-dim); margin:0 0 14px;">List a new product</h4>
+        ${state.listingError ? `<div class="flash">${escapeHtml(state.listingError)}</div>` : ''}
+        ${state.listingOk ? `<div class="flash ok">${escapeHtml(state.listingOk)}</div>` : ''}
+        <form id="listingForm">
+          <div class="field"><label>Product name</label><input type="text" name="name" required placeholder="e.g. Refurbished Aster 14 UltraBook"></div>
+          <div class="field"><label>Category</label>
+            <select name="category" required>
+              <option value="Accessories">Accessories</option>
+              <option value="Audio">Audio</option>
+              <option value="Cameras">Cameras</option>
+              <option value="Drones">Drones</option>
+              <option value="Gaming">Gaming</option>
+              <option value="Laptops">Laptops</option>
+              <option value="Networking">Networking</option>
+              <option value="Printers">Printers</option>
+              <option value="Smart Home">Smart Home</option>
+              <option value="Smartphones">Smartphones</option>
+              <option value="TV &amp; Home">TV &amp; Home</option>
+              <option value="Tablets">Tablets</option>
+              <option value="Wearables">Wearables</option>
+            </select>
+          </div>
+          <div class="field"><label>Icon (single emoji, optional)</label><input type="text" name="icon" placeholder="💻"></div>
+          <div class="field"><label>Price (₦)</label><input type="number" name="price" min="1" step="1" required placeholder="e.g. 450000"></div>
+          <div class="field"><label>Stock quantity</label><input type="number" name="stock" min="0" step="1" required placeholder="e.g. 5"></div>
+          <div class="field"><label>Description</label><textarea name="description" rows="3" required placeholder="Describe the product buyers will see"></textarea></div>
+          <button class="btn btn-gold btn-block" type="submit" ${state.listingBusy ? 'disabled' : ''}>${state.listingBusy ? 'Publishing…' : 'Publish listing'}</button>
+        </form>
+      </div>
+      <div class="summary-card">
+        <h4 style="font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:1px; color:var(--ink-dim); margin:0 0 14px;">Your listings</h4>
+        ${state.myListingsLoading ? '<div class="empty-note">Loading…</div>' : (state.myListings.length ? state.myListings.map((l) => `
+          <div class="order-card">
+            <div class="oc-head"><span class="cl-name">${escapeHtml(l.icon)} ${escapeHtml(l.name)}</span><span class="oc-status">${l.stock === 0 ? 'Sold out' : l.stock + ' in stock'}</span></div>
+            <div class="cl-meta">${escapeHtml(l.category)} · ${fmt(l.price)}</div>
+          </div>
+        `).join('') : '<div class="empty-note">You haven\u2019t listed any products yet.</div>')}
+      </div>
+    </div>
+  `;
+}
+
+function renderAnalytics() {
+  if (state.analyticsLoading || !state.analytics) {
+    return `<div class="section-head"><h2>Analytics</h2></div><div class="empty-state">Loading your dashboard…</div>`;
+  }
+  const a = state.analytics;
+  return `
+    <div class="section-head"><h2>Analytics</h2></div>
+    <div class="analytics-grid">
+      <div class="stat-card"><div class="stat-label">Revenue</div><div class="stat-value">${fmt(a.revenue)}</div></div>
+      <div class="stat-card"><div class="stat-label">Orders</div><div class="stat-value">${a.ordersCount}</div></div>
+      <div class="stat-card"><div class="stat-label">Units sold</div><div class="stat-value">${a.unitsSold}</div></div>
+      <div class="stat-card"><div class="stat-label">Listings</div><div class="stat-value">${a.listingsCount}</div></div>
+      <div class="stat-card ${a.lowStock ? 'stat-warn' : ''}"><div class="stat-label">Low stock</div><div class="stat-value">${a.lowStock}</div></div>
+      <div class="stat-card ${a.outOfStock ? 'stat-warn' : ''}"><div class="stat-label">Out of stock</div><div class="stat-value">${a.outOfStock}</div></div>
+    </div>
+    <div class="summary-card">
+      <h4 style="font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:1px; color:var(--ink-dim); margin:0 0 14px;">Top listings by revenue</h4>
+      ${a.topListings.length ? a.topListings.map((l) => `
+        <div class="bar-row">
+          <div class="bar-row-head"><span class="bar-name">${escapeHtml(l.name)}</span><span class="bar-meta">${fmt(l.revenue)} · ${l.units} sold</span></div>
+          <div class="bar-track"><div class="bar-fill" style="width:${a.maxRevenue ? Math.max(4, Math.round((l.revenue / a.maxRevenue) * 100)) : 0}%"></div></div>
+        </div>
+      `).join('') : '<div class="empty-note">No sales yet — once buyers order your listings, they\u2019ll show up here.</div>'}
+    </div>
+  `;
+}
+
+function renderAdmin() {
+  if (state.adminLoading || !state.adminReport) {
+    return `<div class="section-head"><h2>Admin</h2></div><div class="empty-state">Loading platform data…</div>`;
+  }
+  const r = state.adminReport;
+  const maxRev = r.topProducts.length ? r.topProducts[0].revenue : 0;
+  return `
+    <div class="section-head"><h2>Admin</h2></div>
+    <nav class="tabs" style="margin-bottom:18px;">
+      <button data-action="admin-tab" data-tab="reports" class="${state.adminTab === 'reports' ? 'active' : ''}">Reports</button>
+      <button data-action="admin-tab" data-tab="listings" class="${state.adminTab === 'listings' ? 'active' : ''}">Listing moderation</button>
+      <button data-action="admin-tab" data-tab="users" class="${state.adminTab === 'users' ? 'active' : ''}">User moderation</button>
+    </nav>
+    ${state.adminTab === 'reports' ? `
+      <div class="analytics-grid">
+        <div class="stat-card"><div class="stat-label">Total revenue</div><div class="stat-value">${fmt(r.totalRevenue)}</div></div>
+        <div class="stat-card"><div class="stat-label">Orders</div><div class="stat-value">${r.ordersCount}</div></div>
+        <div class="stat-card"><div class="stat-label">Units sold</div><div class="stat-value">${r.totalUnits}</div></div>
+        <div class="stat-card"><div class="stat-label">Users (buyers / sellers)</div><div class="stat-value">${r.buyersCount} / ${r.sellersCount}</div></div>
+        <div class="stat-card"><div class="stat-label">Seller listings</div><div class="stat-value">${r.listingsCount}</div></div>
+        <div class="stat-card ${r.flaggedCount ? 'stat-warn' : ''}"><div class="stat-label">Removed listings</div><div class="stat-value">${r.flaggedCount}</div></div>
+      </div>
+      <div class="summary-card">
+        <h4 style="font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:1px; color:var(--ink-dim); margin:0 0 14px;">Top-selling products (platform-wide)</h4>
+        ${r.topProducts.length ? r.topProducts.map((p) => `
+          <div class="bar-row">
+            <div class="bar-row-head"><span class="bar-name">${escapeHtml(p.name)}</span><span class="bar-meta">${fmt(p.revenue)} · ${p.units} sold</span></div>
+            <div class="bar-track"><div class="bar-fill" style="width:${maxRev ? Math.max(4, Math.round((p.revenue / maxRev) * 100)) : 0}%"></div></div>
+          </div>
+        `).join('') : '<div class="empty-note">No orders placed yet.</div>'}
+      </div>
+    ` : ''}
+    ${state.adminTab === 'listings' ? `
+      <div class="summary-card">
+        <h4 style="font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:1px; color:var(--ink-dim); margin:0 0 14px;">Seller listings</h4>
+        ${state.adminListings.length ? `<table class="admin-table"><thead><tr><th>Product</th><th>Seller</th><th>Price</th><th>Stock</th><th>Status</th><th></th></tr></thead><tbody>
+          ${state.adminListings.map((l) => `
+            <tr class="${l.removed ? 'row-removed' : ''}">
+              <td>${escapeHtml(l.name)}</td>
+              <td>${escapeHtml(l.sellerName || '')}</td>
+              <td>${fmt(l.price)}</td>
+              <td>${l.stock}</td>
+              <td>${l.removed ? 'Removed' : 'Live'}</td>
+              <td><button type="button" class="btn ${l.removed ? 'btn-gold' : 'btn-wine'}" style="padding:6px 10px; font-size:12px;" data-action="toggle-listing" data-id="${l.id}">${l.removed ? 'Restore' : 'Remove'}</button></td>
+            </tr>
+          `).join('')}
+        </tbody></table>` : '<div class="empty-note">No seller listings yet.</div>'}
+      </div>
+    ` : ''}
+    ${state.adminTab === 'users' ? `
+      <div class="summary-card">
+        <h4 style="font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:1px; color:var(--ink-dim); margin:0 0 14px;">Registered users</h4>
+        ${state.adminUsers.length ? `<table class="admin-table"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>
+          ${state.adminUsers.map((u) => `
+            <tr class="${u.disabled ? 'row-removed' : ''}">
+              <td>${escapeHtml(u.name)}</td>
+              <td>${escapeHtml(u.email)}</td>
+              <td>${escapeHtml(u.role)}</td>
+              <td>${u.disabled ? 'Disabled' : 'Active'}</td>
+              <td><button type="button" class="btn ${u.disabled ? 'btn-gold' : 'btn-wine'}" style="padding:6px 10px; font-size:12px;" data-action="toggle-user" data-id="${u.id}">${u.disabled ? 'Re-enable' : 'Disable'}</button></td>
+            </tr>
+          `).join('')}
+        </tbody></table>` : '<div class="empty-note">No buyers or sellers yet.</div>'}
+      </div>
+    ` : ''}
+  `;
+}
+
+function renderInfoModal() {
+  const key = state.infoModal;
+  if (!key || !POLICY_CONTENT[key]) return `<div class="modal-overlay"></div>`;
+  const c = POLICY_CONTENT[key];
+  return `
+  <div class="modal-overlay open" data-action="close-info">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="infoModalTitle" onclick="event.stopPropagation()">
+      <button class="modal-close" data-action="close-info" aria-label="Close dialog">✕</button>
+      <div class="policy-body">
+        <h3 id="infoModalTitle">${escapeHtml(c.title)}</h3>
+        ${c.body}
+      </div>
+    </div>
+  </div>`;
+}
+
+function sellerLabelFor(product) {
+  return product.sellerName ? `Sold by ${product.sellerName}` : 'ElectroMart (official store)';
+}
+
+function internalSellerMatches(product, allProducts) {
+  const nameKey = (product.name || '').trim().toLowerCase();
+  if (!nameKey) return [];
+  return allProducts
+    .filter((p) => p.id !== product.id && (p.name || '').trim().toLowerCase() === nameKey)
+    .map((p) => ({ id: p.id, price: p.price, stock: p.stock, label: sellerLabelFor(p) }))
+    .sort((a, b) => a.price - b.price);
+}
+
+function renderProductModal() {
+  const product = state.products.find((p) => p.id === state.selectedProductId);
+  if (!product) return `<div class="modal-overlay"></div>`;
+  return `
+  <div class="modal-overlay open" data-action="close-product">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="productModalTitle" onclick="event.stopPropagation()">
+      <button class="modal-close" data-action="close-product" aria-label="Close product details">✕</button>
+      <div class="pd-wrap">
+        <div class="pd-top">
+          <div class="pd-icon" aria-hidden="true">${product.icon}</div>
+          <div>
+            <div class="pd-cat">${escapeHtml(product.category)} · ${escapeHtml(product.sku)}${product.sellerName ? ` · Sold by ${escapeHtml(product.sellerName)}` : ''}</div>
+            <h2 class="pd-title" id="productModalTitle">${escapeHtml(product.name)}</h2>
+            <div class="pd-compare">Cheapest elsewhere: ${escapeHtml(cheapestCompetitor(product).name)} ${fmt(cheapestCompetitor(product).price)}</div>
+            <div class="pd-price">${fmt(product.price)} <span style="font-family:var(--body); font-weight:600; font-size:12px; color:var(--wine);">Save ${Math.round((1 - product.price / cheapestCompetitor(product).price) * 100)}%</span></div>
+            <p class="pd-desc">${escapeHtml(product.description)}</p>
+          </div>
+        </div>
+        <div class="mp-compare">
+          <h4>Price comparison across marketplaces</h4>
+          <div class="mp-row mp-us">
+            <span class="mp-name">ElectroMart <span class="mp-badge">Lowest price</span></span>
+            <span class="mp-price">${fmt(product.price)}</span>
+          </div>
+          ${competitorPricesFor(product).map((c) => `
+            <div class="mp-row">
+              <span class="mp-name">${escapeHtml(c.name)}</span>
+              <span class="mp-price">${fmt(c.price)}</span>
+            </div>
+          `).join('')}
+          <div class="mp-note">Illustrative estimates for comparison only — not live prices pulled from these marketplaces.</div>
+        </div>
+        ${(() => {
+          const internal = internalSellerMatches(product, state.allProducts.length ? state.allProducts : state.products);
+          const cheapestInternal = internal.length ? Math.min(product.price, ...internal.map((m) => m.price)) : product.price;
+          return `
+        <div class="mp-compare">
+          <h4>Other ElectroMart sellers of this product</h4>
+          <div class="mp-row mp-us">
+            <span class="mp-name">${escapeHtml(sellerLabelFor(product))} ${internal.length && product.price === cheapestInternal ? '<span class="mp-badge">Lowest price</span>' : ''}</span>
+            <span class="mp-price">${fmt(product.price)}</span>
+          </div>
+          ${internal.length ? internal.map((m) => `
+            <div class="mp-row" data-action="open-product" data-id="${m.id}" style="cursor:pointer;">
+              <span class="mp-name">${escapeHtml(m.label)} ${m.price === cheapestInternal ? '<span class="mp-badge">Lowest price</span>' : ''}</span>
+              <span class="mp-price">${fmt(m.price)}</span>
+            </div>
+          `).join('') : ''}
+          <div class="mp-note">${internal.length ? 'Tap another seller to view their listing.' : 'No other ElectroMart sellers are currently listing this exact product.'}</div>
+        </div>`;
+        })()}
+        <div class="pd-specs">
+          ${Object.entries(product.specs || {}).map(([k, v]) => `<div class="spec-row">${escapeHtml(k)}<span>${escapeHtml(String(v))}</span></div>`).join('')}
+        </div>
+        <div class="pd-cert-row">
+          <span class="cert-badge" title="Certified to SON/SONCAP requirements for this product category"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 4 6v6c0 5 3.4 8.4 8 10 4.6-1.6 8-5 8-10V6l-8-4Z"/><path d="m9 12 2 2 4-4"/></svg>SONCAP Certified</span>
+          <span class="cert-badge" title="Sourced and listed with reference to ISO 9001 quality management"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m9 12 2 2 4-4"/></svg>ISO 9001</span>
+          <button type="button" class="link-btn" data-action="open-info" data-key="standards" style="font-family:var(--mono); font-size:10.5px;">View standards &amp; certification info</button>
+        </div>
+        <div class="pd-actions">
+          <button class="btn btn-gold" data-action="add-to-cart" data-id="${product.id}" ${product.stock === 0 ? 'disabled' : ''}>${product.stock === 0 ? 'Out of stock' : 'Add to cart'}</button>
+          ${product.stock > 0 ? `<span class="spec-row">In stock<span>${product.stock}</span></span>` : ''}
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderCartDrawer() {
+  const items = state.cart;
+  const subtotal = cartSubtotal();
+  const shipping = subtotal >= 200000 || subtotal === 0 ? 0 : 3500;
+  return `
+  <div class="overlay ${state.cartOpen ? 'open' : ''}" data-action="close-cart"></div>
+  <div class="drawer ${state.cartOpen ? 'open' : ''}" role="dialog" aria-modal="true" aria-label="Your cart">
+    <div class="drawer-head"><h3>Your cart</h3><button class="close-x" data-action="close-cart" aria-label="Close cart">✕</button></div>
+    <div class="drawer-body">
+      ${items.length === 0 ? '<div class="empty-note">Your cart is empty. Browse the boutique to add items.</div>' : items.map((l) => `
+        <div class="cart-line">
+          <div>
+            <div class="cl-name">${escapeHtml(l.name)}</div>
+            <div class="cl-meta">${fmt(l.price)} each</div>
+          </div>
+          <div class="qty-ctrl">
+            <button data-action="qty-dec" data-id="${l.productId}" aria-label="Decrease quantity of ${escapeAttr(l.name)}">−</button>
+            <span aria-live="polite">${l.qty}</span>
+            <button data-action="qty-inc" data-id="${l.productId}" aria-label="Increase quantity of ${escapeAttr(l.name)}">+</button>
+            <button class="rm" data-action="remove-line" data-id="${l.productId}" aria-label="Remove ${escapeAttr(l.name)} from cart">Remove</button>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+    <div class="drawer-foot">
+      <div class="sum-row"><span>Subtotal</span><span>${fmt(subtotal)}</span></div>
+      <div class="sum-row"><span>Shipping</span><span>${shipping === 0 ? 'Free' : fmt(shipping)}</span></div>
+      <div class="sum-row total"><span>Total</span><span>${fmt(subtotal + shipping)}</span></div>
+      <button class="btn btn-gold btn-block" style="margin-top:12px" data-action="open-checkout" ${items.length === 0 ? 'disabled' : ''}>Checkout</button>
+    </div>
+  </div>`;
+}
+
+function renderCheckoutModal() {
+  if (!state.checkoutOpen) return '';
+  if (state.lastOrder && !state.checkoutOpen) return '';
+  const subtotal = cartSubtotal();
+  const shipping = subtotal >= 200000 ? 0 : 3500;
+  const compareSubtotal = state.cart.reduce((sum, l) => sum + comparePriceFor(l.price) * l.qty, 0);
+  const savings = compareSubtotal - subtotal;
+  const methods = [
+    { id: 'card', label: '💳 Debit / credit card' },
+    { id: 'transfer', label: '🏦 Bank transfer' },
+    { id: 'cod', label: '📦 Cash on delivery' },
+  ];
+  return `
+  <div class="modal-overlay open" data-action="close-checkout">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="checkoutModalTitle" onclick="event.stopPropagation()">
+      <button class="modal-close" data-action="close-checkout" aria-label="Close checkout">✕</button>
+      <div class="pd-wrap">
+        <h2 class="pd-title" id="checkoutModalTitle">Checkout</h2>
+        ${state.checkoutError ? `<div class="flash">${escapeHtml(state.checkoutError)}</div>` : ''}
+        <div class="checkout-grid">
+          <div>
+            <div class="field">
+              <label>Delivery address</label>
+              <textarea id="addressInput" rows="3" placeholder="Street, city, state">${escapeHtml(state.address)}</textarea>
+            </div>
+            <div class="field">
+              <label>Phone number</label>
+              <input id="phoneInput" type="tel" placeholder="080..." value="${escapeAttr(state.phone)}">
+            </div>
+            <label style="display:block; font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:1px; color:var(--ink-dim); margin-bottom:6px;">Payment method</label>
+            <div class="pay-options">
+              ${methods.map((m) => `
+                <div class="pay-opt ${state.paymentMethod === m.id ? 'active' : ''}" data-action="select-payment" data-method="${m.id}">${m.label}</div>
+              `).join('')}
+            </div>
+            ${state.paymentMethod === 'card' ? `
+              <div class="field">
+                <label>Name on card</label>
+                <input id="cardNameInput" type="text" placeholder="As printed on the card" value="${escapeAttr(state.cardName)}">
+              </div>
+              <div class="field">
+                <label>Card number</label>
+                <input id="cardNumberInput" type="text" inputmode="numeric" placeholder="1234 5678 9012 3456" maxlength="19" value="${escapeAttr(state.cardNumber)}">
+              </div>
+              <div style="display:flex; gap:12px;">
+                <div class="field" style="flex:1;">
+                  <label>Expiry (MM/YY)</label>
+                  <input id="cardExpiryInput" type="text" placeholder="MM/YY" maxlength="5" value="${escapeAttr(state.cardExpiry)}">
+                </div>
+                <div class="field" style="flex:1;">
+                  <label>CVV</label>
+                  <input id="cardCvvInput" type="text" inputmode="numeric" placeholder="123" maxlength="4" value="${escapeAttr(state.cardCvv)}">
+                </div>
+              </div>
+            ` : ''}
+            ${state.paymentMethod === 'transfer' ? `
+              <div class="pd-specs">
+                <div class="spec-row">Bank<span>${escapeHtml(BANK_TRANSFER_DETAILS.bankName)}</span></div>
+                <div class="spec-row">Account name<span>${escapeHtml(BANK_TRANSFER_DETAILS.accountName)}</span></div>
+                <div class="spec-row">Account number<span>${escapeHtml(BANK_TRANSFER_DETAILS.accountNumber)}</span></div>
+              </div>
+              <div style="font-family:var(--mono); font-size:10.5px; color:var(--ink-dim); line-height:1.6; margin-bottom:4px;">
+                Transfer the order total to the account above, then tap "Place order". Your order is confirmed once payment reflects.
+              </div>
+            ` : ''}
+          </div>
+          <div class="summary-card">
+            <div class="sum-row"><span>Subtotal</span><span>${fmt(subtotal)}</span></div>
+            <div class="sum-row"><span>Shipping</span><span>${shipping === 0 ? 'Free' : fmt(shipping)}</span></div>
+            <div class="sum-row total"><span>Total</span><span>${fmt(subtotal + shipping)}</span></div>
+            ${savings > 0 ? `<div class="sum-row" style="color:var(--gold-dim); font-weight:600;"><span>Est. savings</span><span>${fmt(savings)}</span></div>` : ''}
+            <div style="font-family:var(--mono); font-size:10px; color:var(--ink-dim); line-height:1.5; margin-top:6px;">
+              Best Price Guarantee — found this item cheaper elsewhere? Show us and we'll match it.
+              Savings shown are estimates vs. Konga, Jumia, AliExpress, Slot, and Jiji pricing, not live competitor data.
+            </div>
+            <button class="btn btn-gold btn-block" style="margin-top:14px" data-action="place-order" ${state.checkoutBusy ? 'disabled' : ''}>${state.checkoutBusy ? 'Placing order…' : 'Place order'}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderPaymentConfirm(o) {
+  if (o.paid || !o.rrr) return '';
+  const draft = state.rrrDrafts[o.trackingId] || '';
+  const err = state.rrrErrors[o.trackingId];
+  return `
+    <div class="pd-specs" style="margin-top:10px;">
+      <div class="spec-row">RRR (Remita Retrieval Reference)<span>${escapeHtml(o.rrr)}</span></div>
+    </div>
+    <div class="field" style="margin-top:10px; margin-bottom:8px;">
+      <label>Confirm payment — enter RRR</label>
+      <input class="rrr-input" data-id="${escapeAttr(o.trackingId)}" type="text" placeholder="Enter the RRR above to confirm" value="${escapeAttr(draft)}">
+    </div>
+    ${err ? `<div class="flash">${escapeHtml(err)}</div>` : ''}
+    <button class="btn btn-gold" data-action="confirm-payment" data-id="${escapeAttr(o.trackingId)}">Confirm payment</button>
+  `;
+}
+
+function renderDeliveryFeedback(o) {
+  const isDelivered = o.trackingStepIndex === o.trackingSteps.length - 1 && !!o.deliveredAt;
+  if (!isDelivered) return '';
+  const err = state.returnErrors[o.trackingId];
+
+  if (!o.feedback) {
+    const busy = !!state.feedbackBusy[o.trackingId];
+    return `
+      <div class="pd-specs" style="margin-top:10px;">
+        <div class="spec-row" style="font-weight:700; color:var(--ink);">Delivered — are you satisfied with this order?</div>
+      </div>
+      <div style="display:flex; gap:10px; margin-top:8px;">
+        <button class="btn btn-gold" data-action="feedback-yes" data-id="${escapeAttr(o.trackingId)}" ${busy ? 'disabled' : ''}>${busy ? 'Saving…' : '🙂 Yes, satisfied'}</button>
+        <button class="btn btn-ghost" data-action="feedback-no" data-id="${escapeAttr(o.trackingId)}" ${busy ? 'disabled' : ''}>${busy ? 'Saving…' : '🙁 Not satisfied'}</button>
+      </div>
+    `;
+  }
+
+  if (o.feedback.satisfied) {
+    return `
+      <div class="flash ok" style="margin-top:10px;">Thanks for letting us know you're happy with this order! 🎉</div>
+    `;
+  }
+
+  if (o.returnRequest) {
+    const typeLabel = o.returnRequest.type === 'damaged_faulty' ? 'Damaged / faulty / incorrect item' : 'Change of mind';
+    return `
+      <div class="pd-specs" style="margin-top:10px;">
+        <div class="spec-row" style="font-weight:700; color:var(--wine);">Return &amp; refund requested</div>
+        <div class="spec-row">Type<span>${escapeHtml(typeLabel)}</span></div>
+        <div class="spec-row">Reason<span>${escapeHtml(o.returnRequest.reason)}</span></div>
+        <div class="spec-row">Status<span>${escapeHtml(o.returnRequest.status)}</span></div>
+      </div>
+      <div class="flash" style="margin-top:8px;">We've logged your return request. Reach out on our WhatsApp customer care line to track it — approved returns are refunded within 5–10 business days after we receive and inspect the item, per our <button type="button" class="link-btn" data-action="open-info" data-key="returns">Return &amp; Refund Policy</button>.</div>
+    `;
+  }
+
+  const form = state.returnForms[o.trackingId] || { type: 'change_of_mind', reason: '', notes: '', agree: false };
+  const withinWindow = (Date.now() - o.deliveredAt) / 86400000 <= 7;
+  if (!withinWindow) {
+    return `<div class="flash" style="margin-top:10px;">Sorry, this order is outside the 7-day return &amp; refund window. See our <button type="button" class="link-btn" data-action="open-info" data-key="returns">Return &amp; Refund Policy</button> for details.</div>`;
+  }
+  const busy = !!state.returnBusy[o.trackingId];
+  return `
+    <div class="pd-specs" style="margin-top:10px;">
+      <div class="spec-row" style="font-weight:700; color:var(--wine);">Sorry to hear that. Let's start a return &amp; refund request.</div>
+    </div>
+    <div class="field" style="margin-top:8px;">
+      <label>What's the issue?</label>
+      <select data-return-field="type" data-id="${escapeAttr(o.trackingId)}">
+        <option value="change_of_mind" ${form.type === 'change_of_mind' ? 'selected' : ''}>Change of mind</option>
+        <option value="damaged_faulty" ${form.type === 'damaged_faulty' ? 'selected' : ''}>Damaged, faulty, or incorrect item</option>
+      </select>
+    </div>
+    <div class="field" style="margin-top:8px;">
+      <label>Briefly, what went wrong?</label>
+      <input type="text" data-return-field="reason" data-id="${escapeAttr(o.trackingId)}" placeholder="e.g. Item arrived with a cracked screen" value="${escapeAttr(form.reason)}">
+    </div>
+    <div class="field" style="margin-top:8px;">
+      <label>Additional notes (optional)</label>
+      <input type="text" data-return-field="notes" data-id="${escapeAttr(o.trackingId)}" placeholder="Anything else we should know" value="${escapeAttr(form.notes)}">
+    </div>
+    <label style="display:flex; gap:8px; align-items:flex-start; margin-top:8px; font-size:13px;">
+      <input type="checkbox" data-return-field="agree" data-id="${escapeAttr(o.trackingId)}" ${form.agree ? 'checked' : ''}>
+      <span>The item is unused, in its original packaging with all accessories, and I have proof of purchase, per the <button type="button" class="link-btn" data-action="open-info" data-key="returns">Return &amp; Refund Policy</button>.</span>
+    </label>
+    ${err ? `<div class="flash" style="margin-top:8px;">${escapeHtml(err)}</div>` : ''}
+    <button class="btn btn-gold" style="margin-top:10px;" data-action="submit-return" data-id="${escapeAttr(o.trackingId)}" ${busy ? 'disabled' : ''}>${busy ? 'Submitting…' : 'Submit return & refund request'}</button>
+  `;
+}
+
+function renderOrders() {
+  if (state.lastOrder) {
+    const o = state.lastOrder;
+    const stepIndex = o.trackingStepIndex;
+    return `
+      <div class="section-head"><h2>Order confirmed</h2></div>
+      <div class="summary-card" style="max-width:560px; margin-bottom:24px;">
+        <div class="flash ok">Thank you! Your order has been placed.</div>
+        <div class="spec-row">Tracking ID<span>${escapeHtml(o.trackingId)}</span></div>
+        <div class="spec-row">Delivery address<span>${escapeHtml(o.address || '—')}</span></div>
+        <div class="spec-row">Phone<span>${escapeHtml(o.phone || '—')}</span></div>
+        <div class="spec-row">Total<span>${fmt(o.total)}</span></div>
+        <div class="spec-row">Payment<span>${escapeHtml(o.paymentMethod)}</span></div>
+        ${renderPaymentConfirm(o)}
+        <div class="track-steps" style="margin-top:16px;">
+          ${o.trackingSteps.map((s, i) => `
+            <div class="track-step ${i < stepIndex ? 'done' : i === stepIndex ? 'current' : ''}">
+              <div class="track-dot"></div><div class="track-label">${escapeHtml(s)}</div>
+            </div>`).join('')}
+        </div>
+        ${renderDeliveryFeedback(o)}
+        <button class="btn btn-ghost" style="margin-top:8px" data-action="dismiss-confirmation">View all orders</button>
+      </div>
+    `;
+  }
+  return `
+    <div class="section-head"><h2>My orders</h2></div>
+    ${state.ordersLoading ? '<div class="empty-state">Loading your orders…</div>' : ''}
+    ${!state.ordersLoading && state.orders.length === 0 ? '<div class="empty-state">You haven\'t placed any orders yet.</div>' : ''}
+    ${state.orders.map((o) => `
+      <div class="order-card">
+        <div class="oc-head">
+          <span class="oc-id">${escapeHtml(o.trackingId)} · ${new Date(o.createdAt).toLocaleDateString()}</span>
+          <span class="oc-status ${o.status === 'Pending' ? 'pending' : ''}">${escapeHtml(o.status)}</span>
+        </div>
+        ${o.items.map((i) => `<div class="spec-row">${escapeHtml(i.name)}${i.sellerName ? ` (sold by ${escapeHtml(i.sellerName)})` : ''} × ${i.qty}<span>${fmt(i.price * i.qty)}</span></div>`).join('')}
+        <div class="spec-row" style="margin-top:6px;">Delivery<span>${escapeHtml(o.address || '—')}</span></div>
+        <div class="spec-row">Phone<span>${escapeHtml(o.phone || '—')}</span></div>
+        <div class="spec-row" style="font-weight:700; color:var(--ink);">Total<span>${fmt(o.total)}</span></div>
+        ${renderPaymentConfirm(o)}
+        ${o.paid || !o.rrr ? `
+          <div class="track-steps" style="margin-top:12px;">
+            ${o.trackingSteps.map((s, i) => `
+              <div class="track-step ${i < o.trackingStepIndex ? 'done' : i === o.trackingStepIndex ? 'current' : ''}">
+                <div class="track-dot"></div><div class="track-label">${escapeHtml(s)}</div>
+              </div>`).join('')}
+          </div>
+          ${renderDeliveryFeedback(o)}
+        ` : ''}
+      </div>
+    `).join('')}
+  `;
+}
+
+function renderTrack() {
+  const r = state.trackResult;
+  return `
+    <div class="section-head"><h2>Track package</h2></div>
+    <div class="summary-card" style="max-width:520px;">
+      <div class="field">
+        <label>Tracking ID</label>
+        <input id="trackInput" type="text" placeholder="e.g. EMP-A1B2C3" value="${escapeAttr(state.trackInput)}">
+      </div>
+      ${state.trackError ? `<div class="flash">${escapeHtml(state.trackError)}</div>` : ''}
+      <button class="btn btn-gold" data-action="do-track">Track shipment</button>
+      ${r ? `
+        <div style="margin-top:20px;">
+          <div class="spec-row">Tracking ID<span>${escapeHtml(r.trackingId)}</span></div>
+          <div class="spec-row">Items<span>${r.itemCount}</span></div>
+          <div class="track-steps" style="margin-top:14px;">
+            ${r.trackingSteps.map((s, i) => `
+              <div class="track-step ${i < r.trackingStepIndex ? 'done' : i === r.trackingStepIndex ? 'current' : ''}">
+                <div class="track-dot"></div><div class="track-label">${escapeHtml(s)}</div>
+              </div>`).join('')}
+          </div>
+          ${state.token ? renderDeliveryFeedback(r) : ''}
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function escapeAttr(str) { return escapeHtml(str); }
+
+/* ============================== EVENT WIRING ============================== */
+
+function initCardTilt3d() {
+  root.querySelectorAll('.card').forEach((card) => {
+    card.addEventListener('mousemove', (e) => {
+      const r = card.getBoundingClientRect();
+      const px = (e.clientX - r.left) / r.width;   // 0..1
+      const py = (e.clientY - r.top) / r.height;   // 0..1
+      const rotateY = (px - 0.5) * 16;   // left/right tilt
+      const rotateX = (0.5 - py) * 16;   // up/down tilt
+      card.style.transform = `perspective(700px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) translateY(-3px) scale(1.02)`;
+    });
+    card.addEventListener('mouseleave', () => { card.style.transform = ''; });
+  });
+}
+
+function bindEvents() {
+  initCardTilt3d();
+  // Auth forms
+  const loginForm = document.getElementById('loginForm');
+  if (loginForm) {
+    loginForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const fd = new FormData(loginForm);
+      doLogin(fd.get('email'), fd.get('password'));
+    });
+  }
+  const registerForm = document.getElementById('registerForm');
+  if (registerForm) {
+    registerForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const fd = new FormData(registerForm);
+      doRegister({ name: fd.get('name'), email: fd.get('email'), phone: fd.get('phone'), password: fd.get('password'), role: fd.get('role') });
+    });
+  }
+
+  const listingForm = document.getElementById('listingForm');
+  if (listingForm) {
+    listingForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const fd = new FormData(listingForm);
+      submitListing({ name: fd.get('name'), category: fd.get('category'), icon: fd.get('icon'), price: fd.get('price'), stock: fd.get('stock'), description: fd.get('description') });
+    });
+  }
+
+  const chatForm = document.getElementById('chatForm');
+  if (chatForm) {
+    chatForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const input = document.getElementById('chatInput');
+      sendChatMessage(input ? input.value : '');
+    });
+  }
+  const chatInput = document.getElementById('chatInput');
+  if (chatInput) {
+    chatInput.addEventListener('input', (e) => { state.chatDraft = e.target.value; });
+  }
+
+  const searchInput = document.getElementById('searchInput');
+  if (searchInput) {
+    searchInput.addEventListener('input', debounce((e) => {
+      state.search = e.target.value;
+      loadProducts();
+    }, 350));
+  }
+  const addressInput = document.getElementById('addressInput');
+  if (addressInput) {
+    addressInput.addEventListener('input', (e) => { state.address = e.target.value; });
+  }
+  const phoneInput = document.getElementById('phoneInput');
+  if (phoneInput) {
+    phoneInput.addEventListener('input', (e) => { state.phone = e.target.value; });
+  }
+  const cardNameInput = document.getElementById('cardNameInput');
+  if (cardNameInput) {
+    cardNameInput.addEventListener('input', (e) => { state.cardName = e.target.value; });
+  }
+  const cardNumberInput = document.getElementById('cardNumberInput');
+  if (cardNumberInput) {
+    cardNumberInput.addEventListener('input', (e) => { state.cardNumber = e.target.value; });
+  }
+  const cardExpiryInput = document.getElementById('cardExpiryInput');
+  if (cardExpiryInput) {
+    cardExpiryInput.addEventListener('input', (e) => { state.cardExpiry = e.target.value; });
+  }
+  const cardCvvInput = document.getElementById('cardCvvInput');
+  if (cardCvvInput) {
+    cardCvvInput.addEventListener('input', (e) => { state.cardCvv = e.target.value; });
+  }
+  const trackInput = document.getElementById('trackInput');
+  if (trackInput) {
+    trackInput.addEventListener('input', (e) => { state.trackInput = e.target.value; });
+    trackInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') trackPackage(trackInput.value); });
+  }
+
+  root.querySelectorAll('[data-action]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      const action = el.dataset.action;
+      switch (action) {
+        case 'switch-auth':
+          state.authMode = el.dataset.mode; state.authError = ''; render(); break;
+        case 'nav':
+          state.view = el.dataset.view;
+          if (state.view === 'orders' && !state.lastOrder) loadOrders();
+          if (state.view === 'sell') { state.listingError = ''; state.listingOk = ''; loadMyListings(); }
+          if (state.view === 'analytics') loadAnalytics();
+          if (state.view === 'admin') loadAdmin();
+          render();
+          break;
+        case 'admin-tab': state.adminTab = el.dataset.tab; render(); break;
+        case 'toggle-listing': toggleListingRemoved(el.dataset.id); break;
+        case 'toggle-user': toggleUserDisabled(el.dataset.id); break;
+        case 'toggle-chat':
+          state.chatOpen = !state.chatOpen;
+          if (state.chatOpen) state.chatUnread = 0;
+          render();
+          break;
+        case 'quick-reply': sendChatMessage(el.dataset.text); break;
+        case 'open-cart': state.cartOpen = true; render(); break;
+        case 'close-cart': if (e.target === el) { state.cartOpen = false; render(); } break;
+        case 'logout': doLogout(); break;
+        case 'set-category': state.category = el.dataset.cat; loadProducts(); break;
+        case 'open-product': state.selectedProductId = el.dataset.id; render(); break;
+        case 'close-product': if (e.target === el) { state.selectedProductId = null; render(); } break;
+        case 'add-to-cart': {
+          e.stopPropagation();
+          const product = state.products.find((p) => p.id === el.dataset.id);
+          if (product) addToCart(product);
+          break;
+        }
+        case 'qty-inc': changeQty(el.dataset.id, 1); break;
+        case 'qty-dec': changeQty(el.dataset.id, -1); break;
+        case 'remove-line': removeFromCart(el.dataset.id); break;
+        case 'open-checkout':
+          if (!state.user) { state.authOpen = true; state.authMode = 'login'; state.authError = ''; render(); break; }
+          state.checkoutOpen = true; state.checkoutError = ''; render(); break;
+        case 'close-auth': if (e.target === el) { state.authOpen = false; state.authError = ''; render(); } break;
+        case 'close-checkout': if (e.target === el) { state.checkoutOpen = false; render(); } break;
+        case 'select-payment': state.paymentMethod = el.dataset.method; render(); break;
+        case 'place-order': placeOrder(); break;
+        case 'dismiss-confirmation': state.lastOrder = null; loadOrders(); break;
+        case 'do-track': trackPackage((document.getElementById('trackInput') || {}).value || ''); break;
+        case 'confirm-payment': confirmPayment(el.dataset.id); break;
+        case 'feedback-yes': submitFeedback(el.dataset.id, true); break;
+        case 'feedback-no': submitFeedback(el.dataset.id, false); break;
+        case 'submit-return': submitReturnRequest(el.dataset.id); break;
+        case 'open-info': state.infoModal = el.dataset.key; render(); break;
+        case 'close-info': if (e.target === el) { state.infoModal = null; render(); } break;
+        case 'pick-category': {
+          const sel = document.querySelector('#listingForm select[name="category"]');
+          if (sel) sel.value = el.dataset.cat;
+          break;
+        }
+      }
+    });
+  });
+}
+
+function debounce(fn, wait) {
+  let t;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), wait); };
+}
+
+/* ================================= BOOT ==================================== */
+
+(async function boot() {
+  root.addEventListener('input', (e) => {
+    if (e.target.matches('.rrr-input')) {
+      state.rrrDrafts[e.target.dataset.id] = e.target.value;
+    }
+    if (e.target.matches('[data-return-field]')) {
+      const field = e.target.dataset.returnField;
+      const value = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+      updateReturnForm(e.target.dataset.id, field, value);
+    }
+  });
+  root.addEventListener('change', (e) => {
+    if (e.target.matches('[data-return-field]')) {
+      const field = e.target.dataset.returnField;
+      const value = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+      updateReturnForm(e.target.dataset.id, field, value);
+    }
+  });
+  if (state.token) {
+    try {
+      state.user = await api('/auth/me');
+      localStorage.setItem('emp_user', JSON.stringify(state.user));
+    } catch (_) {
+      clearSession();
+    }
+  }
+  render();
+  loadProducts(); loadAllProducts();
+})();
+
+</script>
+</body>
+</html>"""
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path.split("?")[0] in ("/", "/index.html"):
+            body = HTML.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.path == "/favicon.ico":
+            self.send_response(204)
+            self.end_headers()
+        else:
+            self.send_error(404, "Not found")
+
+    def log_message(self, *args):
+        pass  # keep the terminal quiet
+
+
+def main():
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    except OSError:
+        print(f"Port {port} is busy - picking a free one (saved data is tied to the port).")
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    url = f"http://127.0.0.1:{server.server_address[1]}/"
+    print(f"ElectroMart is running at {url}  (Ctrl+C to stop)")
+    threading.Timer(0.6, lambda: webbrowser.open(url)).start()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nStopped.")
+    finally:
+        server.server_close()
+
+
+if __name__ == "__main__":
+    main()
